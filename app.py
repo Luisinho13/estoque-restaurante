@@ -102,6 +102,27 @@ elif pagina == "Cadastrar Insumo":
         else:
             st.error("Informe o nome do insumo.")
 
+    st.divider()
+    st.subheader("Excluir insumo")
+    st.caption(
+        "⚠️ Isso apaga o insumo e todo o histórico ligado a ele "
+        "(ficha técnica, compras e contagens). Não tem como desfazer."
+    )
+
+    insumos_existentes = listar_insumos()
+    if not insumos_existentes:
+        st.info("Nenhum insumo cadastrado ainda.")
+    else:
+        insumo_excluir = st.selectbox("Selecione o insumo para excluir", insumos_existentes)
+        confirmar = st.checkbox(f"Confirmo que quero excluir '{insumo_excluir}' permanentemente")
+        if st.button("Excluir insumo", type="primary", disabled=not confirmar):
+            try:
+                crud.excluir_insumo(insumo_excluir)
+                st.success(f"Insumo '{insumo_excluir}' excluído.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
 
 # ---------- Cadastrar Prato ----------
 elif pagina == "Cadastrar Prato":

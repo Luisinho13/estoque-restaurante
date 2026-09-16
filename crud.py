@@ -55,6 +55,26 @@ def definir_ficha_tecnica(prato_nome: str, insumo_nome: str, quantidade_por_prat
     conn.close()
 
 
+def excluir_insumo(nome: str):
+    """
+    Exclui um insumo e todo o histórico ligado a ele (ficha técnica,
+    compras e contagens físicas). Use com cuidado: não tem como desfazer.
+    """
+    conn = get_connection()
+    insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (nome,)).fetchone()
+    if not insumo:
+        conn.close()
+        raise ValueError(f"Insumo '{nome}' não encontrado.")
+
+    insumo_id = insumo["id"]
+    conn.execute("DELETE FROM ficha_tecnica WHERE insumo_id = ?", (insumo_id,))
+    conn.execute("DELETE FROM compras WHERE insumo_id = ?", (insumo_id,))
+    conn.execute("DELETE FROM contagens_fisicas WHERE insumo_id = ?", (insumo_id,))
+    conn.execute("DELETE FROM insumos WHERE id = ?", (insumo_id,))
+    conn.commit()
+    conn.close()
+
+
 # ---------- Lançamentos ----------
 
 def registrar_compra(insumo_nome: str, quantidade: float, data: str,
