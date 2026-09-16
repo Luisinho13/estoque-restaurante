@@ -75,6 +75,25 @@ def excluir_insumo(nome: str):
     conn.close()
 
 
+def excluir_prato(nome: str):
+    """
+    Exclui um prato e todo o histórico ligado a ele (ficha técnica e
+    vendas diárias). Use com cuidado: não tem como desfazer.
+    """
+    conn = get_connection()
+    prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (nome,)).fetchone()
+    if not prato:
+        conn.close()
+        raise ValueError(f"Prato '{nome}' não encontrado.")
+
+    prato_id = prato["id"]
+    conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (prato_id,))
+    conn.execute("DELETE FROM vendas_diarias WHERE prato_id = ?", (prato_id,))
+    conn.execute("DELETE FROM pratos WHERE id = ?", (prato_id,))
+    conn.commit()
+    conn.close()
+
+
 # ---------- Lançamentos ----------
 
 def registrar_compra(insumo_nome: str, quantidade: float, data: str,

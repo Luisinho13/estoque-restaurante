@@ -84,6 +84,44 @@ if pagina == "Painel de Estoque":
         if not alertas.empty:
             st.warning(f"⚠️ {len(alertas)} insumo(s) abaixo do estoque mínimo!")
 
+        st.divider()
+        st.caption(
+            "Excluir um insumo diretamente daqui apaga também ficha técnica, "
+            "compras e contagens físicas ligadas a ele. Não tem como desfazer."
+        )
+
+        for item in dados:
+            nome = item["insumo"]
+            col1, col2, col3, col4 = st.columns([4, 2, 2, 1])
+            with col1:
+                st.write(f"**{nome}**")
+            with col2:
+                st.write(f"{item['estoque_atual']:.1f}")
+            with col3:
+                st.write(item["unidade_medida"])
+            with col4:
+                if st.button("🗑️", key=f"painel_del_{nome}", help=f"Excluir {nome}"):
+                    st.session_state["painel_excluir_pendente"] = nome
+                    st.rerun()
+
+        pendente = st.session_state.get("painel_excluir_pendente")
+        if pendente:
+            st.warning(
+                f"⚠️ Excluir **{pendente}** apaga também ficha técnica, compras "
+                f"e contagens físicas ligadas a ele. Não tem como desfazer."
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(f"Sim, excluir '{pendente}' definitivamente", type="primary"):
+                    crud.excluir_insumo(pendente)
+                    st.success(f"Insumo '{pendente}' excluído.")
+                    del st.session_state["painel_excluir_pendente"]
+                    st.rerun()
+            with col2:
+                if st.button("Cancelar"):
+                    del st.session_state["painel_excluir_pendente"]
+                    st.rerun()
+
 
 # ---------- Cadastrar Insumo ----------
 elif pagina == "Cadastrar Insumo":
@@ -142,6 +180,27 @@ elif pagina == "Cadastrar Prato":
                 st.error(f"Erro: {e}")
         else:
             st.error("Informe o nome do prato.")
+
+    st.divider()
+    st.subheader("Excluir prato")
+    st.caption(
+        "⚠️ Isso apaga o prato e todo o histórico ligado a ele "
+        "(ficha técnica e vendas diárias). Não tem como desfazer."
+    )
+
+    pratos_existentes = listar_pratos()
+    if not pratos_existentes:
+        st.info("Nenhum prato cadastrado ainda.")
+    else:
+        prato_excluir = st.selectbox("Selecione o prato para excluir", pratos_existentes)
+        confirmar_prato = st.checkbox(f"Confirmo que quero excluir '{prato_excluir}' permanentemente")
+        if st.button("Excluir prato", type="primary", disabled=not confirmar_prato):
+            try:
+                crud.excluir_prato(prato_excluir)
+                st.success(f"Prato '{prato_excluir}' excluído.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro: {e}")
 
 
 # ---------- Ficha Técnica ----------
