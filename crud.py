@@ -94,6 +94,22 @@ def registrar_compra(insumo_nome: str, quantidade: float, data: str,
     conn.close()
 
 
+def total_vendido_no_dia(prato_nome: str, data: str) -> float:
+    """Soma a quantidade de um prato já lançada numa data (0 se não houver nada)."""
+    conn = get_connection()
+    prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()
+    if not prato:
+        conn.close()
+        raise ValueError(f"Prato '{prato_nome}' não encontrado.")
+
+    total = conn.execute(
+        "SELECT COALESCE(SUM(quantidade), 0) AS total FROM vendas_diarias WHERE prato_id = ? AND data = ?",
+        (prato["id"], data),
+    ).fetchone()["total"]
+    conn.close()
+    return total
+
+
 def registrar_venda_diaria(prato_nome: str, quantidade: int, data: str):
     conn = get_connection()
     prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()

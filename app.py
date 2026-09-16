@@ -296,10 +296,43 @@ elif pagina == "Lançar Venda do Dia":
 
         if enviado:
             try:
-                crud.registrar_venda_diaria(prato, quantidade, str(data))
-                st.success("Venda registrada!")
+                ja_lancado = crud.total_vendido_no_dia(prato, str(data))
             except Exception as e:
                 st.error(f"Erro: {e}")
+                ja_lancado = None
+
+            if ja_lancado:
+                st.session_state["venda_pendente"] = {
+                    "prato": prato,
+                    "quantidade": quantidade,
+                    "data": str(data),
+                    "ja_lancado": ja_lancado,
+                }
+            elif ja_lancado == 0:
+                crud.registrar_venda_diaria(prato, quantidade, str(data))
+                st.success("Venda registrada!")
+
+        pendente = st.session_state.get("venda_pendente")
+        if pendente:
+            st.warning(
+                f"Já existe(m) {pendente['ja_lancado']:.0f} unidade(s) de "
+                f"**{pendente['prato']}** lançada(s) em {pendente['data']}. "
+                f"Isso pode ser um lançamento duplicado (ex: clique duplo no botão). "
+                f"Confirma que quer somar mais {pendente['quantidade']:.0f}?"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Sim, somar mesmo assim"):
+                    crud.registrar_venda_diaria(
+                        pendente["prato"], pendente["quantidade"], pendente["data"]
+                    )
+                    st.success("Venda registrada!")
+                    del st.session_state["venda_pendente"]
+                    st.rerun()
+            with col2:
+                if st.button("Cancelar"):
+                    del st.session_state["venda_pendente"]
+                    st.rerun()
 
 
 # ---------- Contagem Física Mensal ----------
