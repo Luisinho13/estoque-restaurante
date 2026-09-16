@@ -155,18 +155,37 @@ elif pagina == "Ficha Técnica":
     if not pratos or not insumos:
         st.info("Cadastre ao menos um prato e um insumo antes de continuar.")
     else:
+        prato = st.selectbox("Prato", pratos)
+        num_insumos = st.number_input(
+            "Quantos insumos essa ficha técnica usa?",
+            min_value=1, max_value=10, value=1, step=1,
+        )
+
         with st.form("form_ficha"):
-            prato = st.selectbox("Prato", pratos)
-            insumo = st.selectbox("Insumo", insumos)
-            quantidade = st.number_input("Quantidade usada por prato", min_value=0.0, step=0.01)
+            linhas = []
+            for i in range(int(num_insumos)):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    insumo_i = st.selectbox(f"Insumo {i + 1}", insumos, key=f"ficha_insumo_{i}")
+                with col2:
+                    quantidade_i = st.number_input(
+                        f"Quantidade {i + 1}", min_value=0.0, step=0.01, key=f"ficha_qtd_{i}"
+                    )
+                linhas.append((insumo_i, quantidade_i))
+
             enviado = st.form_submit_button("Salvar")
 
         if enviado:
-            try:
-                crud.definir_ficha_tecnica(prato, insumo, quantidade)
-                st.success(f"Ficha técnica salva: {prato} usa {quantidade} de {insumo}.")
-            except Exception as e:
-                st.error(f"Erro: {e}")
+            nomes_usados = [nome for nome, _ in linhas]
+            if len(set(nomes_usados)) != len(nomes_usados):
+                st.error("Cada insumo só pode aparecer uma vez na ficha técnica do prato.")
+            else:
+                try:
+                    for insumo_i, quantidade_i in linhas:
+                        crud.definir_ficha_tecnica(prato, insumo_i, quantidade_i)
+                    st.success(f"Ficha técnica de '{prato}' salva com {len(linhas)} insumo(s)!")
+                except Exception as e:
+                    st.error(f"Erro: {e}")
 
 
 # ---------- Lançar Compra ----------
