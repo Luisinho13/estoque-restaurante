@@ -1,0 +1,13 @@
+# Banco de dados local (dados reais não devem ir pro repositório)
+estoque.db
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Ambientes virtuais
+venv/
+.venv/
+
+# Configurações do VS Code
+.vscode/
