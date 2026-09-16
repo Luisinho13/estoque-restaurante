@@ -135,20 +135,20 @@ def calcular_estoque_teorico(insumo_nome: str) -> dict:
         baseline = 0
         data_baseline = "0000-00-00"  # sem contagem ainda: considera tudo desde o início
 
-    # 2. Compras depois da baseline
+    # 2. Compras a partir da baseline (inclui o próprio dia da contagem)
     total_compras = conn.execute(
         """SELECT COALESCE(SUM(quantidade), 0) AS total FROM compras
-           WHERE insumo_id = ? AND data > ?""",
+           WHERE insumo_id = ? AND data >= ?""",
         (insumo_id, data_baseline),
     ).fetchone()["total"]
 
-    # 3. Consumo depois da baseline (vendas x ficha técnica)
+    # 3. Consumo a partir da baseline (vendas x ficha técnica, inclui o mesmo dia)
     total_consumo = conn.execute(
         """
         SELECT COALESCE(SUM(v.quantidade * ft.quantidade_por_prato), 0) AS total
         FROM vendas_diarias v
         JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-        WHERE ft.insumo_id = ? AND v.data > ?
+        WHERE ft.insumo_id = ? AND v.data >= ?
         """,
         (insumo_id, data_baseline),
     ).fetchone()["total"]
