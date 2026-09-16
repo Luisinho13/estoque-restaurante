@@ -48,6 +48,14 @@ def listar_pratos():
     return [d["nome"] for d in dados]
 
 
+def unidades_dos_insumos():
+    """Retorna um dicionário {nome do insumo: unidade de medida}."""
+    conn = database.get_connection()
+    dados = conn.execute("SELECT nome, unidade_medida FROM insumos").fetchall()
+    conn.close()
+    return {d["nome"]: d["unidade_medida"] for d in dados}
+
+
 # ---------- Painel de Estoque ----------
 if pagina == "Painel de Estoque":
     st.subheader("Estoque teórico atual")
@@ -214,22 +222,26 @@ elif pagina == "Ficha Técnica":
     if not pratos or not insumos:
         st.info("Cadastre ao menos um prato e um insumo antes de continuar.")
     else:
+        unidades = unidades_dos_insumos()
+
         prato = st.selectbox("Prato", pratos)
         num_insumos = st.number_input(
             "Quantos insumos essa ficha técnica usa?",
             min_value=1, max_value=10, value=1, step=1,
         )
 
+        insumos_selecionados = [
+            st.selectbox(f"Insumo {i + 1}", insumos, key=f"ficha_insumo_{i}")
+            for i in range(int(num_insumos))
+        ]
+
         with st.form("form_ficha"):
             linhas = []
-            for i in range(int(num_insumos)):
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    insumo_i = st.selectbox(f"Insumo {i + 1}", insumos, key=f"ficha_insumo_{i}")
-                with col2:
-                    quantidade_i = st.number_input(
-                        f"Quantidade {i + 1}", min_value=0.0, step=0.01, key=f"ficha_qtd_{i}"
-                    )
+            for i, insumo_i in enumerate(insumos_selecionados):
+                quantidade_i = st.number_input(
+                    f"Quantidade de '{insumo_i}' usada por prato ({unidades[insumo_i]})",
+                    min_value=0.0, step=0.01, key=f"ficha_qtd_{i}",
+                )
                 linhas.append((insumo_i, quantidade_i))
 
             enviado = st.form_submit_button("Salvar")
@@ -255,9 +267,13 @@ elif pagina == "Lançar Compra":
     if not insumos:
         st.info("Cadastre um insumo antes de lançar compras.")
     else:
+        unidades = unidades_dos_insumos()
+        insumo = st.selectbox("Insumo", insumos)
+
         with st.form("form_compra"):
-            insumo = st.selectbox("Insumo", insumos)
-            quantidade = st.number_input("Quantidade comprada", min_value=0.0, step=0.5)
+            quantidade = st.number_input(
+                f"Quantidade comprada ({unidades[insumo]})", min_value=0.0, step=0.5
+            )
             data = st.date_input("Data da compra", value=datetime.date.today())
             fornecedor = st.text_input("Fornecedor (opcional)")
             enviado = st.form_submit_button("Registrar")
@@ -422,9 +438,13 @@ elif pagina == "Contagem Física Mensal":
     if not insumos:
         st.info("Cadastre um insumo antes de registrar contagem.")
     else:
+        unidades = unidades_dos_insumos()
+        insumo = st.selectbox("Insumo", insumos)
+
         with st.form("form_contagem"):
-            insumo = st.selectbox("Insumo", insumos)
-            quantidade = st.number_input("Quantidade contada fisicamente", min_value=0.0, step=0.5)
+            quantidade = st.number_input(
+                f"Quantidade contada fisicamente ({unidades[insumo]})", min_value=0.0, step=0.5
+            )
             data = st.date_input("Data da contagem", value=datetime.date.today())
             observacao = st.text_input("Observação (opcional)")
             enviado = st.form_submit_button("Registrar")
