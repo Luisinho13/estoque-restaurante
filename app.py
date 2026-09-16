@@ -11,6 +11,7 @@ import streamlit as st
 
 import database
 import crud
+import nfe_import
 
 database.criar_tabelas()  # garante que as tabelas existem ao abrir o app
 
@@ -25,6 +26,7 @@ pagina = st.sidebar.radio(
         "Cadastrar Prato",
         "Ficha Técnica",
         "Lançar Compra",
+        "Importar Nota Fiscal",
         "Lançar Venda do Dia",
         "Contagem Física Mensal",
     ],
@@ -190,7 +192,94 @@ elif pagina == "Lançar Compra":
                 st.error(f"Erro: {e}")
 
 
-# ---------- Lançar Venda do Dia ----------
+# ---------- Importar Nota Fiscal ----------
+elif pagina == "Importar Nota Fiscal":
+    st.subheader("Importar compra a partir de uma NF-e (XML)")
+    st.caption(
+        "Envie o arquivo XML da nota fiscal. Produtos já mapeados são "
+        "lançados automaticamente; produtos novos você mapeia uma vez aqui, "
+        "e da próxima vez que aparecerem numa nota já são reconhecidos sozinhos."
+    )
+
+    arquivo = st.file_uploader("Arquivo XML da NF-e", type=["xml"])
+
+    if arquivo is not None:
+        try:
+            dados = nfe_import.extrair_dados_nfe(arquivo)
+            st.session_state["nfe_dados"] = dados
+        except Exception as e:
+            st.error(f"Não consegui ler esse XML: {e}")
+            st.session_state.pop("nfe_dados", None)
+
+    dados = st.session_state.get("nfe_dados")
+
+    if dados:
+        st.info(
+            f"Nota nº {dados['numero_nota']} — {dados['fornecedor_nome']} "
+            f"— emitida em {dados['data_emissao']} — {len(dados['itens'])} item(ns)"
+        )
+
+        insumos = listar_insumos()
+        itens_sem_mapa = []
+        for item in dados["itens"]:
+            mapeamento = crud.buscar_mapeamento_nfe(dados["fornecedor_cnpj"], item["codigo_produto"])
+            if mapeamento:
+                st.write(
+                    f"✅ **{item['descricao']}** → já mapeado para "
+                    f"*{mapeamento['insumo_nome']}* "
+                    f"({item['quantidade']} × fator {mapeamento['fator_conversao']} = "
+                    f"{item['quantidade'] * mapeamento['fator_conversao']:.2f})"
+                )
+            else:
+                itens_sem_mapa.append(item)
+
+        if itens_sem_mapa:
+            st.warning(f"{len(itens_sem_mapa)} item(ns) ainda não mapeado(s). Mapeie abaixo:")
+            if not insumos:
+                st.error("Cadastre ao menos um insumo antes de mapear produtos da nota.")
+            else:
+                for item in itens_sem_mapa:
+                    with st.form(f"mapa_{item['codigo_produto']}"):
+                        st.write(
+                            f"**{item['descricao']}** "
+                            f"(código {item['codigo_produto']}, "
+                            f"{item['quantidade']} {item['unidade']} na nota)"
+                        )
+                        insumo_escolhido = st.selectbox(
+                            "Qual insumo isso representa?", insumos,
+                            key=f"sel_{item['codigo_produto']}",
+                        )
+                        fator = st.number_input(
+                            "Fator de conversão (nota → unidade do insumo). "
+                            "Deixe 1 se a unidade já bate.",
+                            min_value=0.0001, value=1.0, step=0.1,
+                            key=f"fator_{item['codigo_produto']}",
+                        )
+                        mapear = st.form_submit_button("Salvar mapeamento")
+
+                    if mapear:
+                        crud.mapear_produto_nfe(
+                            dados["fornecedor_cnpj"], item["codigo_produto"],
+                            item["descricao"], insumo_escolhido, fator,
+                        )
+                        st.success(f"'{item['descricao']}' mapeado para '{insumo_escolhido}'!")
+                        st.rerun()
+        else:
+            st.success("Todos os itens da nota já estão mapeados!")
+
+        st.divider()
+        if st.button("📥 Lançar compras desta nota no estoque", type="primary"):
+            lancados, nao_mapeados = nfe_import.processar_itens_nfe(dados, dados["fornecedor_cnpj"])
+            if lancados:
+                st.success(f"{len(lancados)} compra(s) lançada(s) no estoque!")
+                for descricao, insumo_nome, qtd in lancados:
+                    st.write(f"- {descricao} → {insumo_nome}: +{qtd:.2f}")
+            if nao_mapeados:
+                st.warning(
+                    f"{len(nao_mapeados)} item(ns) ainda sem mapeamento não foram lançados. "
+                    "Mapeie-os acima e clique de novo."
+                )
+            st.session_state.pop("nfe_dados", None)
 elif pagina == "Lançar Venda do Dia":
     st.subheader("Registrar vendas do dia")
     st.caption("Digite quantos de cada prato foram vendidos hoje, olhando o resumo do PDV.")

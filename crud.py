@@ -192,3 +192,54 @@ def calcular_estoque_todos_insumos() -> list[dict]:
     nomes = [row["nome"] for row in conn.execute("SELECT nome FROM insumos").fetchall()]
     conn.close()
     return [calcular_estoque_teorico(nome) for nome in nomes]
+
+
+# ---------- Mapeamento de produtos de nota fiscal (NF-e) ----------
+
+def mapear_produto_nfe(fornecedor_cnpj: str, codigo_produto: str, descricao_produto: str,
+                        insumo_nome: str, fator_conversao: float = 1):
+    """
+    Liga um produto de um fornecedor (identificado pelo código dele na nota)
+    a um insumo do sistema. Depois de mapeado uma vez, próximas notas do
+    mesmo fornecedor com o mesmo código são reconhecidas automaticamente.
+
+    fator_conversao: use se a unidade da nota for diferente da unidade do
+    insumo (ex: nota vem em "cx" com 12 unidades, insumo é controlado em "un"
+    -> fator_conversao = 12).
+    """
+    conn = get_connection()
+    insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (insumo_nome,)).fetchone()
+    if not insumo:
+        conn.close()
+        raise ValueError(f"Insumo '{insumo_nome}' não encontrado.")
+
+    conn.execute(
+        """
+        INSERT INTO mapeamento_produtos_nfe
+            (fornecedor_cnpj, codigo_produto, descricao_produto, insumo_id, fator_conversao)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(fornecedor_cnpj, codigo_produto)
+        DO UPDATE SET insumo_id = excluded.insumo_id,
+                      fator_conversao = excluded.fator_conversao,
+                      descricao_produto = excluded.descricao_produto
+        """,
+        (fornecedor_cnpj, codigo_produto, descricao_produto, insumo["id"], fator_conversao),
+    )
+    conn.commit()
+    conn.close()
+
+
+def buscar_mapeamento_nfe(fornecedor_cnpj: str, codigo_produto: str):
+    """Retorna o mapeamento (insumo + fator de conversão) para um produto, ou None."""
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT m.fator_conversao, i.nome AS insumo_nome
+        FROM mapeamento_produtos_nfe m
+        JOIN insumos i ON i.id = m.insumo_id
+        WHERE m.fornecedor_cnpj = ? AND m.codigo_produto = ?
+        """,
+        (fornecedor_cnpj, codigo_produto),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None

@@ -74,6 +74,16 @@ def criar_tabelas():
             data TEXT NOT NULL,          -- formato YYYY-MM-DD
             observacao TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS mapeamento_produtos_nfe (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fornecedor_cnpj TEXT NOT NULL,
+            codigo_produto TEXT NOT NULL,      -- cProd da nota fiscal
+            descricao_produto TEXT,            -- xProd, só pra referência humana
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+            fator_conversao REAL NOT NULL DEFAULT 1,  -- ex: nota vem em "cx" mas insumo é em "kg"
+            UNIQUE(fornecedor_cnpj, codigo_produto)
+        );
         """
     )
 
