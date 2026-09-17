@@ -359,6 +359,37 @@ def buscar_mapeamento_zig(sku: str):
     return {"prato_nome": row["prato_nome"], "ignorar": bool(row["ignorar"])}
 
 
+def listar_mapeamentos_zig() -> list[dict]:
+    """Todos os mapeamentos já salvos, para revisão na tela de importação."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT m.sku, m.nome_produto, m.ignorar, p.nome AS prato_nome
+        FROM mapeamento_produtos_zig m
+        LEFT JOIN pratos p ON p.id = m.prato_id
+        ORDER BY m.nome_produto
+        """
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "sku": linha["sku"],
+            "nome_produto": linha["nome_produto"],
+            "prato_nome": linha["prato_nome"],
+            "ignorar": bool(linha["ignorar"]),
+        }
+        for linha in linhas
+    ]
+
+
+def remover_mapeamento_zig(sku: str):
+    """Apaga o mapeamento de um SKU. O produto volta a aparecer como pendente."""
+    conn = get_connection()
+    conn.execute("DELETE FROM mapeamento_produtos_zig WHERE sku = ?", (sku,))
+    conn.commit()
+    conn.close()
+
+
 # ---------- Consultas do dashboard ----------
 
 def _data_inicio(dias: int) -> str:

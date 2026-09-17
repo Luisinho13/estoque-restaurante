@@ -683,6 +683,68 @@ def pagina_venda():
 NAO_CONTROLAR = "— não controlar no estoque —"
 
 
+def _mapeamentos_salvos(pratos):
+    """Permite revisar, trocar o prato ou remover um mapeamento já salvo."""
+    mapeamentos = crud.listar_mapeamentos_zig()
+    if not mapeamentos:
+        return
+
+    with st.expander(f"Mapeamentos salvos ({len(mapeamentos)})"):
+        st.caption(
+            "Troque o prato de um produto, marque como não controlado, ou remova o "
+            "mapeamento para que ele volte a aparecer como pendente na próxima importação."
+        )
+        antes = pd.DataFrame([
+            {
+                "SKU": m["sku"],
+                "Produto na Zig": m["nome_produto"],
+                "Prato no sistema": (
+                    NAO_CONTROLAR if m["ignorar"] or not m["prato_nome"] else m["prato_nome"]
+                ),
+                "Remover": False,
+            }
+            for m in mapeamentos
+        ])
+        depois = st.data_editor(
+            antes,
+            hide_index=True,
+            width="stretch",
+            key="zig_mapeamentos",
+            disabled=["SKU", "Produto na Zig"],
+            column_config={
+                "Prato no sistema": st.column_config.SelectboxColumn(
+                    options=pratos + [NAO_CONTROLAR]
+                ),
+                "Remover": st.column_config.CheckboxColumn(
+                    help="Apaga o mapeamento deste produto"
+                ),
+            },
+        )
+
+        if st.button("Salvar alterações", key="zig_salvar_mapeamentos"):
+            alterados = 0
+            removidos = 0
+            for (_, linha_antes), (_, linha_depois) in zip(antes.iterrows(), depois.iterrows()):
+                escolha = linha_depois["Prato no sistema"]
+                if linha_depois["Remover"]:
+                    crud.remover_mapeamento_zig(linha_antes["SKU"])
+                    removidos += 1
+                elif escolha and escolha != linha_antes["Prato no sistema"]:
+                    crud.mapear_produto_zig(
+                        linha_antes["SKU"],
+                        linha_antes["Produto na Zig"],
+                        prato_nome=None if escolha == NAO_CONTROLAR else escolha,
+                        ignorar=escolha == NAO_CONTROLAR,
+                    )
+                    alterados += 1
+
+            if alterados or removidos:
+                st.success(f"{alterados} alterado(s), {removidos} removido(s).")
+                st.rerun()
+            else:
+                st.info("Nada foi alterado.")
+
+
 def pagina_zig():
     st.title("🧾 Importar Vendas do PDV")
     st.caption(
@@ -700,6 +762,8 @@ def pagina_zig():
         except Exception as e:
             st.error(f"Não consegui ler essa planilha: {e}")
             st.session_state.pop("zig_dados", None)
+
+    _mapeamentos_salvos(pratos)
 
     dados = st.session_state.get("zig_dados")
     if not dados:
