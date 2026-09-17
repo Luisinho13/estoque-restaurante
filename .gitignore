@@ -13,3 +13,6 @@ venv/
 
 # Configurações do VS Code
 .vscode/
+
+# Contexto do projeto para o Claude Code (uso local)
+CLAUDE.md
