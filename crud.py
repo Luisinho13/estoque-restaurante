@@ -11,6 +11,8 @@ Lógica do cálculo de estoque teórico para um insumo:
     4. Resultado = estoque teórico atual, sem precisar contar nada fisicamente.
 """
 
+import datetime
+
 from database import get_connection
 
 
@@ -89,6 +91,7 @@ def excluir_prato(nome: str):
     prato_id = prato["id"]
     conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (prato_id,))
     conn.execute("DELETE FROM vendas_diarias WHERE prato_id = ?", (prato_id,))
+    conn.execute("DELETE FROM mapeamento_produtos_zig WHERE prato_id = ?", (prato_id,))
     conn.execute("DELETE FROM pratos WHERE id = ?", (prato_id,))
     conn.commit()
     conn.close()
@@ -136,6 +139,29 @@ def registrar_venda_diaria(prato_nome: str, quantidade: int, data: str):
         conn.close()
         raise ValueError(f"Prato '{prato_nome}' não encontrado.")
 
+    conn.execute(
+        "INSERT INTO vendas_diarias (prato_id, quantidade, data) VALUES (?, ?, ?)",
+        (prato["id"], quantidade, data),
+    )
+    conn.commit()
+    conn.close()
+
+
+def substituir_venda_diaria(prato_nome: str, quantidade: int, data: str):
+    """
+    Deixa a venda de um prato num dia valendo exatamente `quantidade`, apagando
+    o que já havia sido lançado naquele dia. É o que a importação da Zig usa:
+    reimportar o mesmo relatório corrige o dia em vez de somar em cima.
+    """
+    conn = get_connection()
+    prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()
+    if not prato:
+        conn.close()
+        raise ValueError(f"Prato '{prato_nome}' não encontrado.")
+
+    conn.execute(
+        "DELETE FROM vendas_diarias WHERE prato_id = ? AND data = ?", (prato["id"], data)
+    )
     conn.execute(
         "INSERT INTO vendas_diarias (prato_id, quantidade, data) VALUES (?, ?, ?)",
         (prato["id"], quantidade, data),
@@ -278,3 +304,204 @@ def buscar_mapeamento_nfe(fornecedor_cnpj: str, codigo_produto: str):
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ---------- Mapeamento de produtos do PDV (Zig) ----------
+
+def mapear_produto_zig(sku: str, nome_produto: str, prato_nome: str = None,
+                       ignorar: bool = False):
+    """
+    Liga um produto do PDV (identificado pelo SKU da Zig) a um prato do sistema.
+    `ignorar=True` marca produtos que não consomem estoque controlado (couvert,
+    itens de loja), para que não voltem a aparecer como pendência a cada importação.
+
+    O SKU é sensível a maiúsculas: na Zig, 'Fe' e 'FE' são produtos diferentes.
+    """
+    conn = get_connection()
+    prato_id = None
+    if prato_nome:
+        prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()
+        if not prato:
+            conn.close()
+            raise ValueError(f"Prato '{prato_nome}' não encontrado.")
+        prato_id = prato["id"]
+
+    conn.execute(
+        """
+        INSERT INTO mapeamento_produtos_zig (sku, nome_produto, prato_id, ignorar)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(sku)
+        DO UPDATE SET nome_produto = excluded.nome_produto,
+                      prato_id = excluded.prato_id,
+                      ignorar = excluded.ignorar
+        """,
+        (sku, nome_produto, prato_id, 1 if ignorar else 0),
+    )
+    conn.commit()
+    conn.close()
+
+
+def buscar_mapeamento_zig(sku: str):
+    """Retorna {'prato_nome': str|None, 'ignorar': bool} para um SKU, ou None."""
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT m.ignorar, p.nome AS prato_nome
+        FROM mapeamento_produtos_zig m
+        LEFT JOIN pratos p ON p.id = m.prato_id
+        WHERE m.sku = ?
+        """,
+        (sku,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"prato_nome": row["prato_nome"], "ignorar": bool(row["ignorar"])}
+
+
+# ---------- Consultas do dashboard ----------
+
+def _data_inicio(dias: int) -> str:
+    return (datetime.date.today() - datetime.timedelta(days=dias - 1)).isoformat()
+
+
+def consumo_por_insumo(dias: int = 30) -> list[dict]:
+    """Quanto de cada insumo foi consumido (vendas × ficha técnica) no período."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo,
+               i.unidade_medida,
+               SUM(v.quantidade * ft.quantidade_por_prato) AS consumo
+        FROM vendas_diarias v
+        JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+        JOIN insumos i ON i.id = ft.insumo_id
+        WHERE v.data >= ?
+        GROUP BY i.id
+        ORDER BY consumo DESC
+        """,
+        (_data_inicio(dias),),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def vendas_por_dia(dias: int = 30) -> list[dict]:
+    """Total de pratos vendidos por dia no período."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT data, SUM(quantidade) AS pratos_vendidos
+        FROM vendas_diarias
+        WHERE data >= ?
+        GROUP BY data
+        ORDER BY data
+        """,
+        (_data_inicio(dias),),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def top_pratos(dias: int = 30, limite: int = 5) -> list[dict]:
+    """Pratos mais vendidos no período."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT p.nome AS prato, SUM(v.quantidade) AS vendidos
+        FROM vendas_diarias v
+        JOIN pratos p ON p.id = v.prato_id
+        WHERE v.data >= ?
+        GROUP BY p.id
+        ORDER BY vendidos DESC
+        LIMIT ?
+        """,
+        (_data_inicio(dias), limite),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def dias_desde_ultima_contagem() -> int | None:
+    """Quantos dias se passaram desde a contagem física mais recente (None se nunca houve)."""
+    conn = get_connection()
+    linha = conn.execute("SELECT MAX(data) AS ultima FROM contagens_fisicas").fetchone()
+    conn.close()
+    if not linha or not linha["ultima"]:
+        return None
+    ultima = datetime.date.fromisoformat(linha["ultima"])
+    return (datetime.date.today() - ultima).days
+
+
+def resumo_dashboard(dias: int = 30) -> dict:
+    """Números-chave do topo do dashboard."""
+    conn = get_connection()
+    total_insumos = conn.execute("SELECT COUNT(*) AS n FROM insumos").fetchone()["n"]
+    total_pratos = conn.execute("SELECT COUNT(*) AS n FROM pratos").fetchone()["n"]
+    inicio = _data_inicio(dias)
+    pratos_vendidos = conn.execute(
+        "SELECT COALESCE(SUM(quantidade), 0) AS n FROM vendas_diarias WHERE data >= ?",
+        (inicio,),
+    ).fetchone()["n"]
+    compras_lancadas = conn.execute(
+        "SELECT COUNT(*) AS n FROM compras WHERE data >= ?", (inicio,)
+    ).fetchone()["n"]
+    conn.close()
+
+    estoques = calcular_estoque_todos_insumos()
+    return {
+        "total_insumos": total_insumos,
+        "total_pratos": total_pratos,
+        "pratos_vendidos": pratos_vendidos,
+        "compras_lancadas": compras_lancadas,
+        "abaixo_do_minimo": sum(1 for e in estoques if e["abaixo_do_minimo"]),
+        "estoque_negativo": sum(1 for e in estoques if e["estoque_atual"] < 0),
+        "dias_sem_contagem": dias_desde_ultima_contagem(),
+    }
+
+
+def cobertura_estoque(dias: int = 30) -> list[dict]:
+    """
+    Para cada insumo, estima em quantos dias o estoque acaba, usando o consumo
+    médio diário do período. É o número que diz o que precisa ser comprado antes
+    de faltar — insumo sem consumo no período fica com dias_restantes None.
+    """
+    consumo = {c["insumo"]: c["consumo"] for c in consumo_por_insumo(dias)}
+    resultado = []
+    for estoque in calcular_estoque_todos_insumos():
+        consumo_total = consumo.get(estoque["insumo"], 0)
+        media_diaria = consumo_total / dias if consumo_total else 0
+        resultado.append({
+            **estoque,
+            "consumo_periodo": round(consumo_total, 2),
+            "consumo_medio_diario": round(media_diaria, 2),
+            "dias_restantes": (
+                round(estoque["estoque_atual"] / media_diaria, 1) if media_diaria > 0 else None
+            ),
+        })
+    return resultado
+
+
+def movimentacoes_recentes(limite: int = 15) -> list[dict]:
+    """Últimos lançamentos de qualquer tipo, para o feed de atividade do dashboard."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT c.data, 'Compra' AS tipo, i.nome AS item,
+               c.quantidade AS quantidade, i.unidade_medida AS unidade,
+               COALESCE(c.fornecedor, '') AS detalhe
+        FROM compras c JOIN insumos i ON i.id = c.insumo_id
+        UNION ALL
+        SELECT v.data, 'Venda', p.nome, v.quantidade, 'pratos', ''
+        FROM vendas_diarias v JOIN pratos p ON p.id = v.prato_id
+        UNION ALL
+        SELECT cf.data, 'Contagem', i.nome, cf.quantidade_contada, i.unidade_medida,
+               COALESCE(cf.observacao, '')
+        FROM contagens_fisicas cf JOIN insumos i ON i.id = cf.insumo_id
+        ORDER BY data DESC, tipo
+        LIMIT ?
+        """,
+        (limite,),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]

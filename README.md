@@ -39,6 +39,13 @@ desperdício.
 
 ## Funcionalidades
 
+- **Dashboard** com números-chave do período (insumos abaixo do mínimo,
+  pratos vendidos, compras lançadas, dias desde a última contagem),
+  gráfico de consumo por insumo, curva de vendas por dia, ranking de
+  pratos e feed de movimentações recentes
+- **"O que acaba primeiro"**: estimativa de em quantos dias cada insumo
+  acaba (estoque ÷ consumo médio diário), com semáforo de status — é o
+  que diz o que precisa ser comprado antes de faltar
 - Cadastro de insumos (com unidade de medida e estoque mínimo)
 - Cadastro de pratos e ficha técnica (receita), com suporte a vários
   insumos por prato numa única tela (de 1 a 10 de uma vez)
@@ -46,8 +53,13 @@ desperdício.
 - Importação automática de compras via XML de NF-e — produtos do
   fornecedor são mapeados uma vez para um insumo (com fator de
   conversão de unidade), e reconhecidos sozinhos nas próximas notas
-- Lançamento de vendas diárias por prato, com aviso e confirmação antes
-  de duplicar um lançamento do mesmo prato no mesmo dia
+- **Importação das vendas do PDV (Zig)** a partir da planilha de vendas
+  exportada: as linhas item a item são somadas por produto e por dia, e
+  cada SKU é ligado uma vez a um prato (ou marcado como "não controlar",
+  no caso de couvert e itens de loja). Reimportar o mesmo relatório
+  corrige o dia em vez de somar de novo
+- Lançamento manual de vendas diárias por prato, com aviso e confirmação
+  antes de duplicar um lançamento do mesmo prato no mesmo dia
 - Painel com estoque teórico atualizado e alerta visual para itens
   abaixo do estoque mínimo
 - Registro de contagem física mensal, que vira a nova base do cálculo
@@ -72,6 +84,19 @@ streamlit run app.py
 
 O app abre automaticamente em `http://localhost:8501`.
 
+### Ver o sistema com dados de exemplo
+
+Para conhecer o app sem cadastrar nada (e sem tocar no banco real), gere
+um banco de demonstração com 60 dias de vendas, compras e contagens:
+
+```bash
+python seed_demo.py
+ESTOQUE_DB=estoque_demo.db streamlit run app.py
+```
+
+A variável `ESTOQUE_DB` aponta o app para outro arquivo de banco. Sem
+ela, o app usa o `estoque.db` de sempre.
+
 ## Estrutura do projeto
 
 ```
@@ -80,15 +105,14 @@ estoque-restaurante/
 ├── crud.py           # cadastros, lançamentos e cálculo do estoque teórico
 ├── app.py            # interface Streamlit
 ├── nfe_import.py      # leitura de XML de NF-e e lançamento automático de compras
+├── zig_import.py      # leitura da planilha de vendas da Zig e lançamento das vendas
+├── seed_demo.py       # gera um banco de demonstração com dados de exemplo
 ├── diagnostico.py     # script auxiliar para inspecionar dados de um prato/insumo
 └── requirements.txt  # dependências
 ```
 
 ## Próximos passos (v2)
 
-- Integração com exportação de vendas do PDV (Zig), eliminando o
-  lançamento manual das vendas diárias — pendente, sem API pública
-  documentada até o momento
 - Histórico de perdas por reconciliação (diferença entre teórico e
   contagem física)
 - Exportação de relatórios mensais

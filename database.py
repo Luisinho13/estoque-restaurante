@@ -11,10 +11,13 @@ Estrutura:
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
 """
 
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "estoque.db"
+# ESTOQUE_DB permite rodar o app sobre outro banco (ex: o de demonstração)
+# sem encostar nos dados reais.
+DB_PATH = Path(os.environ.get("ESTOQUE_DB") or Path(__file__).parent / "estoque.db")
 
 
 def get_connection():
@@ -73,6 +76,14 @@ def criar_tabelas():
             quantidade_contada REAL NOT NULL,
             data TEXT NOT NULL,          -- formato YYYY-MM-DD
             observacao TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS mapeamento_produtos_zig (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku TEXT NOT NULL UNIQUE,          -- código do produto na Zig
+            nome_produto TEXT,                 -- nome na Zig, só pra referência humana
+            prato_id INTEGER REFERENCES pratos(id),  -- NULL quando o produto é ignorado
+            ignorar INTEGER NOT NULL DEFAULT 0 -- 1 = item que não consome estoque (couvert, loja)
         );
 
         CREATE TABLE IF NOT EXISTS mapeamento_produtos_nfe (

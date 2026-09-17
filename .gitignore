@@ -1,6 +1,7 @@
 # Banco de dados local (dados reais não devem ir pro repositório)
 estoque.db
 estoque.db.bak*
+estoque_demo.db
 
 # Cache do Python
 __pycache__/
