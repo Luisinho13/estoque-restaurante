@@ -7,6 +7,11 @@ toda segunda-feira e vira uma conferência mensal.
 Projeto pessoal, criado para um problema real do restaurante onde
 trabalho como comprador.
 
+![Dashboard do sistema](docs/dashboard.png)
+
+> As telas deste README usam o banco de demonstração gerado por
+> `seed_demo.py`, com dados fictícios.
+
 ## O problema
 
 O controle era uma planilha e uma contagem física toda semana: alguém
@@ -64,6 +69,8 @@ desperdício — a diferença entre o teórico e o real.
   acaba (estoque ÷ consumo médio diário), com semáforo de status. É a
   tela que responde o que precisa ser comprado antes de faltar
 - Registro da contagem física mensal, que vira a nova base do cálculo
+
+![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
 
 ## Decisões que valem nota
 
