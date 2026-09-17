@@ -221,10 +221,16 @@ def pagina_dashboard():
         border=True,
     )
 
+    if resumo["sem_contagem_inicial"]:
+        st.info(
+            f"{resumo['sem_contagem_inicial']} insumo(s) ainda não têm contagem física. "
+            "Sem um ponto de partida, o cálculo começa do zero e o estoque deles fica "
+            "negativo — registre uma contagem para o número passar a valer."
+        )
     if resumo["estoque_negativo"]:
         st.error(
-            f"{resumo['estoque_negativo']} insumo(s) com estoque negativo. "
-            "Isso costuma significar compra não lançada ou ficha técnica errada."
+            f"{resumo['estoque_negativo']} insumo(s) com estoque negativo mesmo tendo "
+            "contagem física. Isso costuma significar compra não lançada ou ficha técnica errada."
         )
     if resumo["dias_sem_contagem"] is not None and resumo["dias_sem_contagem"] > 35:
         st.warning(

@@ -15,6 +15,8 @@ import datetime
 
 from database import get_connection
 
+SEM_CONTAGEM = "sem contagem física ainda"
+
 
 # ---------- Cadastros ----------
 
@@ -244,7 +246,7 @@ def calcular_estoque_teorico(insumo_nome: str) -> dict:
         "estoque_minimo": insumo["estoque_minimo"],
         "estoque_atual": round(estoque_atual, 1),
         "abaixo_do_minimo": estoque_atual < insumo["estoque_minimo"],
-        "baseline_usada": data_baseline if ultima_contagem else "sem contagem física ainda",
+        "baseline_usada": data_baseline if ultima_contagem else SEM_CONTAGEM,
     }
 
 
@@ -480,13 +482,20 @@ def resumo_dashboard(dias: int = 30) -> dict:
     conn.close()
 
     estoques = calcular_estoque_todos_insumos()
+    sem_baseline = [e for e in estoques if e["baseline_usada"] == SEM_CONTAGEM]
     return {
         "total_insumos": total_insumos,
         "total_pratos": total_pratos,
         "pratos_vendidos": pratos_vendidos,
         "compras_lancadas": compras_lancadas,
         "abaixo_do_minimo": sum(1 for e in estoques if e["abaixo_do_minimo"]),
-        "estoque_negativo": sum(1 for e in estoques if e["estoque_atual"] < 0),
+        # Negativo só é sintoma de erro quando existe uma contagem de partida;
+        # sem contagem, o cálculo começa do zero e fica negativo por definição.
+        "estoque_negativo": sum(
+            1 for e in estoques
+            if e["estoque_atual"] < 0 and e["baseline_usada"] != SEM_CONTAGEM
+        ),
+        "sem_contagem_inicial": len(sem_baseline),
         "dias_sem_contagem": dias_desde_ultima_contagem(),
     }
 
