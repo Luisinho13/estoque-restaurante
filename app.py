@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 import database
+import auth
 import crud
 import nfe_import
 import zig_import
@@ -27,6 +28,37 @@ st.set_page_config(
 
 COR = "#2E7D6F"
 COR_ALERTA = "#C1443F"
+
+
+# ---------- Login ----------
+
+def tela_login():
+    """Pede usuário e senha. Nada do sistema é montado antes disso passar."""
+    st.markdown("<div style='height: 8vh'></div>", unsafe_allow_html=True)
+    _, meio, _ = st.columns([1, 1.2, 1])
+    with meio:
+        st.markdown(
+            f"<h1 style='text-align:center; color:{COR}; margin-bottom:0'>📦 Estoque</h1>"
+            "<p style='text-align:center; color:#6b7280; margin-top:4px'>"
+            "Entre para acessar o sistema</p>",
+            unsafe_allow_html=True,
+        )
+        with st.form("login"):
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+            entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+
+        if entrar:
+            if auth.verificar_login(usuario.strip(), senha):
+                st.session_state["usuario"] = usuario.strip()
+                st.rerun()
+            else:
+                st.error("Usuário ou senha incorretos.")
+
+
+if not st.session_state.get("usuario"):
+    tela_login()
+    st.stop()
 
 
 # ---------- Helpers de consulta ----------
@@ -958,6 +990,10 @@ navegacao = st.navigation({
 
 with st.sidebar:
     st.divider()
+    st.caption(f"Conectado como **{st.session_state['usuario']}**")
+    if st.button("Sair", icon=":material/logout:", use_container_width=True):
+        st.session_state.pop("usuario", None)
+        st.rerun()
     alertas = crud.resumo_dashboard(30)["abaixo_do_minimo"]
     if alertas:
         st.error(f"⚠️ {alertas} insumo(s) abaixo do mínimo")

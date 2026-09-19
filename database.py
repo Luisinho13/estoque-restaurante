@@ -9,6 +9,7 @@ Estrutura:
 - compras: entradas de estoque (o que foi comprado)
 - vendas_diarias: quantos de cada prato foram vendidos em um dia
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
+- usuarios: quem pode entrar no sistema (senha guardada como hash, nunca em texto)
 """
 
 import os
@@ -76,6 +77,14 @@ def criar_tabelas():
             quantidade_contada REAL NOT NULL,
             data TEXT NOT NULL,          -- formato YYYY-MM-DD
             observacao TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL UNIQUE,
+            senha_hash TEXT NOT NULL,          -- PBKDF2-SHA256, em hexadecimal
+            salt TEXT NOT NULL,                -- salt aleatório por usuário, em hexadecimal
+            criado_em TEXT NOT NULL            -- formato YYYY-MM-DD
         );
 
         CREATE TABLE IF NOT EXISTS mapeamento_produtos_zig (
