@@ -421,20 +421,19 @@ disco efêmero do Streamlit Cloud — o que os visitantes mexerem se desfaz
 sozinho quando o app dorme e acorda.
 
 No painel do Streamlit Cloud, o app de demonstração aponta para o mesmo
-repositório e o mesmo `app.py`. O Community Cloud não tem campo de
-variável de ambiente — a única forma de configurar um app lá é pelos
-secrets — então o conteúdo dos Secrets dele é uma linha só, e nada mais
-(nunca a URL do banco real):
+repositório, mas com **`demo.py` em "Main file path"** e os **Secrets
+vazios**. O `demo.py` liga o modo demonstração e chama o `app.py`, então
+não há configuração nenhuma para acertar no painel — e, mais importante,
+não há campo onde a credencial do banco real possa ser colada por engano.
 
-```toml
-MODO_DEMO = "1"
-```
-
-Localmente dá para ver o mesmo com:
+Localmente é o mesmo comando:
 
 ```bash
-MODO_DEMO=1 streamlit run app.py
+streamlit run demo.py
 ```
+
+`MODO_DEMO=1` como variável de ambiente, ou nos secrets, continua
+funcionando para quem preferir configurar por fora.
 
 ### Primeiros passos num banco vazio
 
@@ -457,6 +456,7 @@ estoque-restaurante/
 ├── ficha_import.py   # leitura das planilhas de ficha técnica → cadastros
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
+├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
 ├── seed_demo.py      # gera um banco de demonstração
 ├── migrar_para_nuvem.py   # copia o banco local para o Postgres
 ├── diagnostico.py    # inspeção de dados de um prato ou insumo
