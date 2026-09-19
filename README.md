@@ -116,9 +116,36 @@ botão de rebaixar fica desabilitado quando só existe um admin aprovado.
 Sem isso, um clique deixaria o sistema sem ninguém capaz de aprovar
 cadastros ou liberar acessos, e não haveria como voltar pela interface.
 
+## Onde os dados ficam
+
+O sistema roda sobre dois bancos e escolhe sozinho qual usar:
+
+- **SQLite**, um arquivo local, quando não há nada configurado. É o modo
+  de quem está desenvolvendo ou rodando tudo na própria máquina.
+- **PostgreSQL**, quando existe uma URL de conexão nos secrets. É o modo
+  da nuvem.
+
+O resto do código não sabe qual dos dois está embaixo. `get_connection()`
+devolve nos dois casos um objeto com a mesma interface, e as diferenças de
+dialeto — inclusive a tradução dos `?` para `%s` — ficam todas dentro do
+`database.py`. As consultas continuam escritas uma vez só.
+
+**Por que sair do arquivo.** O disco do Streamlit Community Cloud é
+efêmero: a documentação avisa que arquivos locais podem ser apagados a
+qualquer momento, e o container é reconstruído a partir do repositório
+quando o app reinicia. Um `estoque.db` lá dentro sumiria levando junto
+tudo o que o restaurante tivesse lançado. Um sistema de estoque que
+esquece o estoque não é um sistema de estoque.
+
+O `migrar_para_nuvem.py` copia o arquivo local para o Postgres. Ele
+preserva os ids — a ficha técnica aponta para prato e insumo por id, e
+renumerar quebraria as ligações — ajusta as sequências do Postgres para
+não colidirem com os ids já usados, e se recusa a rodar sobre um destino
+que já tenha dados, para não misturar duas cargas.
+
 ## Decisões que valem nota
 
-Quatro detalhes que não são óbvios e custaram tempo:
+Seis detalhes que não são óbvios e custaram tempo:
 
 **SKU é identificador, não texto.** Na Zig, os códigos de produto
 diferenciam maiúsculas: `Fe` é Arroz Extra e `FE` é Pão Extra. O
@@ -139,6 +166,20 @@ gerando três registros idênticos. O erro estava nos dados, não na conta.
 **A comparação de datas usa `>=`, não `>`.** Vendas feitas no mesmo dia
 da contagem física precisam ser descontadas. Com `>` elas sumiam da
 conta — outro bug que já aconteceu.
+
+**Consulta em laço é lentidão escondida.** O cálculo do estoque de todos
+os insumos chamava, para cada um, a função que calcula um só: quatro
+consultas por insumo, 109 no total. Num arquivo local cada consulta custa
+microssegundos e ninguém percebe. Contra um banco remoto, a mesma tela
+passou a levar 27 segundos. O problema sempre esteve no código — foi a
+rede que o tornou visível. Hoje é uma consulta só, e o Dashboard abre em
+2 segundos.
+
+**Ordenação sem desempate não é ordenação.** O feed de movimentações
+ordenava por data e tipo. Como todas as vendas de um dia têm a mesma data
+e o mesmo tipo, o `LIMIT` cortava linhas diferentes a cada execução, e
+SQLite e Postgres discordavam entre si. Foi a única divergência que
+apareceu ao comparar os dois bancos lado a lado.
 
 ## Como rodar
 
@@ -163,6 +204,36 @@ ESTOQUE_DB=estoque_demo.db streamlit run app.py
 A variável `ESTOQUE_DB` aponta o app para outro arquivo de banco. Sem
 ela, o app usa o `estoque.db` padrão.
 
+### Rodar sobre o banco na nuvem
+
+Basta existir um arquivo `.streamlit/secrets.toml` com a URL do Postgres:
+
+```toml
+[postgres]
+url = "postgresql://usuario:senha@host/banco?sslmode=require"
+```
+
+Com ele presente, o app usa a nuvem em vez do arquivo local, sem nenhuma
+outra mudança. Há um modelo em `.streamlit/secrets.toml.example`. O
+arquivo real está no `.gitignore` e nunca deve ser commitado — a URL
+contém a senha do banco.
+
+Para levar os dados do arquivo local para a nuvem, uma vez:
+
+```bash
+python migrar_para_nuvem.py
+```
+
+### Publicar no Streamlit Community Cloud
+
+1. Suba o repositório para o GitHub
+2. Em share.streamlit.io, conecte o repositório e aponte para `app.py`
+3. Em *Settings → Secrets*, cole o mesmo conteúdo do `secrets.toml`
+
+O app passa a ter um endereço fixo, acessível de qualquer aparelho pelo
+navegador — sem instalar nada. O login continua valendo: o link é
+público, o sistema não.
+
 ### Primeiros passos num banco vazio
 
 A ordem importa, porque cada etapa depende da anterior:
@@ -179,18 +250,38 @@ A ordem importa, porque cada etapa depende da anterior:
 estoque-restaurante/
 ├── app.py            # interface Streamlit (dashboard e telas)
 ├── crud.py           # regras de negócio e cálculo do estoque teórico
-├── database.py       # esquema do banco
+├── database.py       # esquema e conexão (SQLite ou PostgreSQL)
 ├── auth.py           # login, aprovação de cadastros e permissões
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── seed_demo.py      # gera um banco de demonstração
+├── migrar_para_nuvem.py   # copia o banco local para o Postgres
 ├── diagnostico.py    # inspeção de dados de um prato ou insumo
 └── requirements.txt
 ```
 
-Python, SQLite (arquivo local, sem servidor) e Streamlit.
+Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.4 — Banco na nuvem
+
+- `database.py` escolhe o banco sozinho: **PostgreSQL** quando há uma URL
+  configurada, **SQLite** local caso contrário. O restante do código não
+  mudou — as consultas continuam escritas uma vez só, no dialeto do
+  SQLite, e são traduzidas na hora
+- Conexão reaproveitada por thread, em vez de uma nova a cada consulta:
+  num banco remoto, cada conexão refazia o TLS
+- `migrar_para_nuvem.py`, que copia o banco local para o Postgres
+  preservando os ids, ajustando as sequências e se recusando a rodar
+  sobre um destino que já tenha dados
+- Estoque de todos os insumos calculado em **uma consulta** no lugar de
+  109: o Dashboard caiu de ~27s para 2,1s e o Painel para 0,9s
+- Desempate na ordenação das movimentações recentes, que saíam em ordem
+  arbitrária e diferente em cada banco
+- Migração conferida comparando os dois bancos lado a lado: resumo,
+  estoque, consumo, cobertura, vendas, pratos, movimentações, mapeamentos
+  e usuários, todos idênticos
 
 ### v0.3 — Cadastro de usuários com aprovação
 
@@ -233,7 +324,7 @@ Python, SQLite (arquivo local, sem servidor) e Streamlit.
 
 ## Próximos passos
 
-- Publicar na nuvem, com o banco hospedado no lugar do arquivo local
+- Publicar o app no Streamlit Community Cloud (o banco já está na nuvem)
 - Histórico de perdas por reconciliação (diferença entre o teórico e a
   contagem física)
 - Exportação de relatórios mensais
