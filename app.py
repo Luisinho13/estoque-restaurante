@@ -14,6 +14,7 @@ import streamlit as st
 import database
 import auth
 import crud
+import exemplos
 import ficha_import
 import nfe_import
 import zig_import
@@ -1096,6 +1097,23 @@ def pagina_compra():
 
 # ---------- Importar Nota Fiscal ----------
 
+def _arquivo_de_exemplo(rotulo: str, dados: bytes, nome: str, tipo: str):
+    """Oferece um arquivo fictício para baixar, só na vitrine.
+
+    Sem isso, quem abre as telas de importação na demonstração não tem o
+    que subir, e elas são metade do projeto. As datas do arquivo são
+    geradas na hora, relativas a hoje, para o lançamento cair dentro da
+    janela de análise do dashboard.
+    """
+    if not MODO_DEMO:
+        return
+    st.download_button(
+        rotulo, data=dados, file_name=nome, mime=tipo,
+        icon=":material/download:",
+        help="Arquivo fictício, para experimentar a importação.",
+    )
+
+
 def pagina_nfe():
     st.title("🧾 Importar Nota Fiscal")
     st.caption(
@@ -1104,6 +1122,10 @@ def pagina_nfe():
         "e da próxima vez que aparecerem numa nota já são reconhecidos sozinhos."
     )
 
+    _arquivo_de_exemplo(
+        "Baixar uma nota de exemplo", exemplos.nota_fiscal_xml(),
+        "nota-fiscal-exemplo.xml", "application/xml",
+    )
     arquivo = st.file_uploader("Arquivo XML da NF-e", type=["xml"])
 
     if arquivo is not None:
@@ -1320,6 +1342,11 @@ def pagina_zig():
     )
 
     pratos = listar_pratos()
+    _arquivo_de_exemplo(
+        "Baixar um relatório de exemplo", exemplos.vendas_pdv_xlsx(),
+        "vendas-pdv-exemplo.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
     arquivo = st.file_uploader("Planilha de vendas da Zig", type=["xlsx", "xls"])
 
     if arquivo is not None:

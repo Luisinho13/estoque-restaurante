@@ -11,8 +11,9 @@ trabalho como comprador.
 https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
 
 Entra direto e dá para mexer em tudo — lançar venda, importar nota,
-fazer contagem. Os dados são fictícios e voltam ao começo quando o app
-reinicia.
+fazer contagem. As telas de importação têm um botão para baixar um
+arquivo de exemplo e subir ali mesmo. Os dados são fictícios e voltam ao
+começo quando o app reinicia.
 
 **O sistema de verdade:**
 https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
@@ -468,6 +469,7 @@ estoque-restaurante/
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
+├── exemplos.py       # gera a nota fiscal e o relatório de PDV fictícios
 ├── seed_demo.py      # gera um banco de demonstração
 ├── migrar_para_nuvem.py   # copia o banco local para o Postgres
 ├── diagnostico.py    # inspeção de dados de um prato ou insumo
@@ -500,6 +502,9 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
 - `demo.py` é a entrada da vitrine: liga o modo demonstração e chama o
   `app.py`, para que publicar não dependa de acertar campo no painel
+- As telas de importação oferecem, só na vitrine, uma nota fiscal e um
+  relatório de PDV fictícios para baixar e subir ali mesmo — sem eles,
+  duas das telas mais interessantes ficavam sem o que demonstrar
 - `MODO_DEMO` publica o mesmo código como vitrine: dados fictícios,
   sem login e com faixa avisando que nada ali é real
 - O modo demonstração recusa a credencial do Postgres por construção,

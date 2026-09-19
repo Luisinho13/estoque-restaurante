@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nota fiscal FICTÍCIA, só para experimentar a importação do sistema. -->
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <NFe>
+    <infNFe versao="4.00" Id="NFe00000000000000000000000000000000000000000000">
+      <ide>
+        <nNF>004512</nNF>
+        <dhEmi>2026-09-18T09:14:00-03:00</dhEmi>
+        <natOp>VENDA DE MERCADORIA</natOp>
+      </ide>
+      <emit>
+        <CNPJ>12345678000199</CNPJ>
+        <xNome>Hortifruti São João Comércio de Alimentos LTDA</xNome>
+      </emit>
+    <det nItem="1">
+      <prod>
+        <cProd>7891000100103</cProd>
+        <xProd>BATATA INGLESA LAVADA SACO 25KG</xProd>
+        <uCom>SC</uCom>
+        <qCom>4.0000</qCom>
+        <vUnCom>62.9000</vUnCom>
+        <vProd>251.60</vProd>
+      </prod>
+    </det>
+    <det nItem="2">
+      <prod>
+        <cProd>7891000100110</cProd>
+        <xProd>TOMATE ITALIANO CAIXA 20KG</xProd>
+        <uCom>CX</uCom>
+        <qCom>2.0000</qCom>
+        <vUnCom>84.5000</vUnCom>
+        <vProd>169.00</vProd>
+      </prod>
+    </det>
+    <det nItem="3">
+      <prod>
+        <cProd>7891000100127</cProd>
+        <xProd>CEBOLA NACIONAL SACO 20KG</xProd>
+        <uCom>SC</uCom>
+        <qCom>1.0000</qCom>
+        <vUnCom>71.0000</vUnCom>
+        <vProd>71.00</vProd>
+      </prod>
+    </det>
+    <det nItem="4">
+      <prod>
+        <cProd>7891000100134</cProd>
+        <xProd>ALHO DESCASCADO POTE 1KG</xProd>
+        <uCom>UN</uCom>
+        <qCom>6.0000</qCom>
+        <vUnCom>38.2000</vUnCom>
+        <vProd>229.20</vProd>
+      </prod>
+    </det>
+    <det nItem="5">
+      <prod>
+        <cProd>7891000100141</cProd>
+        <xProd>SALSINHA MACO</xProd>
+        <uCom>MC</uCom>
+        <qCom>10.0000</qCom>
+        <vUnCom>3.5000</vUnCom>
+        <vProd>35.00</vProd>
+      </prod>
+    </det>
+      <total>
+        <ICMSTot>
+          <vNF>755.80</vNF>
+        </ICMSTot>
+      </total>
+    </infNFe>
+  </NFe>
+</nfeProc>
