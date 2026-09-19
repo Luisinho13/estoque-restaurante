@@ -14,6 +14,7 @@ import streamlit as st
 import database
 import auth
 import crud
+import ficha_import
 import nfe_import
 import zig_import
 
@@ -849,6 +850,177 @@ def pagina_ficha_tecnica():
                 st.error(f"Erro: {e}")
 
 
+# ---------- Importar Ficha Técnica ----------
+
+def _plano_da_ficha():
+    """Monta o plano de importação com os ajustes de prato feitos na tela."""
+    prato = st.session_state.get("ficha_planilha_prato")
+    producao = st.session_state.get("ficha_planilha_producao")
+    if not prato:
+        return None
+    de_para = dict(ficha_import.DE_PARA_PADRAO)
+    de_para.update(st.session_state.get("ficha_de_para_extra", {}))
+    return ficha_import.montar_plano(prato, producao or [], de_para)
+
+
+def pagina_ficha_import():
+    st.title("📥 Importar Ficha Técnica")
+    st.caption(
+        "Envie as planilhas de ficha técnica e o sistema cadastra insumo, prato "
+        "e receita de uma vez. Nada é gravado antes de você conferir a prévia."
+    )
+
+    col1, col2 = st.columns(2)
+    arquivo_prato = col1.file_uploader(
+        "Ficha dos pratos finais", type=["xlsx"], key="up_ficha_prato"
+    )
+    arquivo_producao = col2.file_uploader(
+        "Ficha de produção (molhos e bases)", type=["xlsx"], key="up_ficha_producao"
+    )
+
+    if arquivo_prato is not None:
+        try:
+            st.session_state["ficha_planilha_prato"] = ficha_import.ler_planilha(arquivo_prato)
+        except Exception as e:
+            st.error(f"Não consegui ler a planilha de pratos: {e}")
+    if arquivo_producao is not None:
+        try:
+            st.session_state["ficha_planilha_producao"] = ficha_import.ler_planilha(arquivo_producao)
+        except Exception as e:
+            st.error(f"Não consegui ler a planilha de produção: {e}")
+
+    if not st.session_state.get("ficha_planilha_prato"):
+        st.info("Envie ao menos a planilha dos pratos finais para ver a prévia.")
+        return
+
+    if not st.session_state.get("ficha_planilha_producao"):
+        st.warning(
+            "Sem a planilha de produção, os molhos e bases citados nas receitas "
+            "viram insumo em vez de serem abertos nos ingredientes de compra."
+        )
+
+    plano = _plano_da_ficha()
+    if plano is None or not plano["fichas"]:
+        st.error("Não encontrei nenhuma ficha técnica preenchida nessas planilhas.")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Pratos", len(plano["pratos"]),
+                delta=f"{len(plano['pratos_novos'])} novos", border=True)
+    col2.metric("Insumos", len(plano["insumos"]),
+                delta=f"{len(plano['insumos_novos'])} novos", border=True)
+    col3.metric("Linhas de ficha", len(plano["fichas"]), border=True)
+    col4.metric("Pontos de atenção", len(plano["avisos"]), border=True)
+
+    if plano["pratos_sem_ficha"]:
+        st.subheader("Pratos do sistema que ficariam sem ficha")
+        st.caption(
+            "Esses pratos já recebem venda, mas nenhuma aba da planilha "
+            "corresponde a eles — sem ficha, vender não desconta nada do "
+            "estoque. Ligue cada um à aba certa, se houver."
+        )
+        abas = sorted({f["aba"] for f in plano["fichas"]})
+        extras = dict(st.session_state.get("ficha_de_para_extra", {}))
+        for prato_sem in plano["pratos_sem_ficha"]:
+            escolha = st.selectbox(
+                f"Aba da planilha que descreve '{prato_sem}'",
+                ["— deixar sem ficha —"] + abas,
+                key=f"liga_{prato_sem}",
+            )
+            if escolha != "— deixar sem ficha —":
+                extras[escolha] = prato_sem
+        if extras != st.session_state.get("ficha_de_para_extra", {}):
+            st.session_state["ficha_de_para_extra"] = extras
+            st.rerun()
+
+    if plano["avisos"]:
+        with st.expander(f"⚠️ {len(plano['avisos'])} ponto(s) de atenção na leitura"):
+            st.caption(
+                "São as linhas em que a planilha estava ambígua e eu tive que "
+                "decidir. Vale conferir antes de gravar."
+            )
+            for aviso in plano["avisos"]:
+                st.markdown(f"- {aviso}")
+
+    with st.expander(f"🥬 {len(plano['insumos_novos'])} insumo(s) que serão criados"):
+        st.dataframe(
+            pd.DataFrame(
+                [{"Insumo": n, "Unidade": plano["insumos"][n]} for n in plano["insumos_novos"]]
+            ),
+            hide_index=True, width="stretch",
+        )
+
+    with st.expander(f"🍽️ {len(plano['pratos_novos'])} prato(s) que serão criados"):
+        st.dataframe(pd.DataFrame({"Prato": plano["pratos_novos"]}),
+                     hide_index=True, width="stretch")
+
+    with st.expander(f"📋 {len(plano['fichas'])} linha(s) de ficha técnica"):
+        st.dataframe(
+            pd.DataFrame([
+                {"Prato": f["prato"], "Insumo": f["insumo"],
+                 "Quantidade": f["quantidade"],
+                 "Unidade": plano["insumos"][f["insumo"]], "Aba": f["aba"]}
+                for f in plano["fichas"]
+            ]),
+            hide_index=True, width="stretch", height=400,
+        )
+
+    if plano["orfaos"]:
+        st.info(
+            "Insumos que existem no sistema e que nenhuma receita da planilha "
+            "usa: " + ", ".join(plano["orfaos"]) +
+            ". Eles não serão apagados — se quiser tirar, use a tela de Insumos."
+        )
+
+    st.divider()
+    corrigir_unidades = True
+    if plano["unidades_divergentes"]:
+        st.subheader("Unidades que não batem")
+        st.caption(
+            "Esses insumos já existem contados numa unidade e a ficha usa outra. "
+            "Deixar como está faz o painel mostrar saldo na unidade errada."
+        )
+        st.dataframe(
+            pd.DataFrame([
+                {"Insumo": d["insumo"], "Hoje no sistema": d["atual"],
+                 "Na planilha": d["planilha"]}
+                for d in plano["unidades_divergentes"]
+            ]),
+            hide_index=True, width="stretch",
+        )
+        corrigir_unidades = st.checkbox(
+            "Passar esses insumos para a unidade da planilha", value=True
+        )
+
+    substituir = st.checkbox(
+        "Substituir a ficha atual dos pratos importados",
+        value=True,
+        help=(
+            "Recomendado. Sem isso, um insumo que saiu da receita continuaria "
+            "sendo descontado para sempre."
+        ),
+    )
+    confirmado = st.checkbox(
+        f"Confirmo a importação de {len(plano['fichas'])} linha(s) de ficha técnica"
+    )
+    if st.button("📥 Cadastrar tudo", type="primary", disabled=not confirmado):
+        try:
+            feito = ficha_import.aplicar_plano(plano, substituir, corrigir_unidades)
+        except Exception as e:
+            st.error(f"Erro ao gravar: {e}")
+            return
+        recado = (
+            f"{feito['insumos']} insumo(s), {feito['pratos']} prato(s) e "
+            f"{feito['fichas']} linha(s) de ficha técnica cadastrados!"
+        )
+        if feito["unidades"]:
+            recado += f" {feito['unidades']} unidade(s) de medida corrigida(s)."
+        st.success(recado)
+        for chave_sessao in ("ficha_planilha_prato", "ficha_planilha_producao",
+                             "ficha_de_para_extra"):
+            st.session_state.pop(chave_sessao, None)
+
+
 # ---------- Lançar Compra ----------
 
 def pagina_compra():
@@ -1447,6 +1619,10 @@ PG_FICHA = st.Page(
     pagina_ficha_tecnica, title="Ficha Técnica", icon=":material/receipt_long:",
     url_path="ficha-tecnica",
 )
+PG_FICHA_IMPORT = st.Page(
+    pagina_ficha_import, title="Importar Ficha Técnica",
+    icon=":material/upload:", url_path="importar-ficha",
+)
 PG_COMPRA = st.Page(
     pagina_compra, title="Lançar Compra", icon=":material/shopping_cart:", url_path="compra"
 )
@@ -1488,6 +1664,7 @@ PAGINAS_POR_AREA = {
     "insumos": PG_INSUMOS,
     "pratos": PG_PRATOS,
     "ficha": PG_FICHA,
+    "ficha_import": PG_FICHA_IMPORT,
     "compra": PG_COMPRA,
     "nfe": PG_NFE,
     "zig": PG_ZIG,
@@ -1504,8 +1681,8 @@ def _liberadas(*areas):
 menu = {}
 if _liberadas("dashboard", "painel", "perdas"):
     menu["Visão geral"] = _liberadas("dashboard", "painel", "perdas")
-if _liberadas("insumos", "pratos", "ficha"):
-    menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha")
+if _liberadas("insumos", "pratos", "ficha", "ficha_import"):
+    menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha", "ficha_import")
 if _liberadas("compra", "nfe", "zig", "venda", "contagem"):
     menu["Lançamentos"] = _liberadas("compra", "nfe", "zig", "venda", "contagem")
 

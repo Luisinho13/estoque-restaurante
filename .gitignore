@@ -19,3 +19,4 @@ venv/
 
 # Contexto do projeto para o Claude Code (uso local)
 CLAUDE.md
+backup-nuvem-*.json

@@ -29,6 +29,7 @@ AREAS = {
     "insumos": "Insumos",
     "pratos": "Pratos",
     "ficha": "Ficha Técnica",
+    "ficha_import": "Importar Ficha Técnica",
     "compra": "Lançar Compra",
     "nfe": "Importar Nota Fiscal",
     "zig": "Importar Vendas (PDV)",

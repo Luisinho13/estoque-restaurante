@@ -84,6 +84,15 @@ não olhar.
   nota não bate com a unidade controlada (caixa → unidade, por exemplo).
   Nas próximas notas do mesmo fornecedor, o produto é reconhecido sozinho
 
+**Cadastros**
+- Insumo, prato e ficha técnica um a um, pelo formulário
+- Importação das **planilhas de ficha técnica** da cozinha (a de pratos
+  finais e a de produção): cada aba vira um prato, e as receitas de
+  produção — molhos, bases, bolinhos — são abertas nos ingredientes de
+  compra, para o consumo cair em cima do que entra pela nota fiscal.
+  Nada é gravado antes da prévia, que mostra o que vai ser criado e cada
+  ponto em que a planilha estava ambígua
+
 **Saídas de estoque**
 - Importação das vendas do **PDV (Zig)** a partir da planilha exportada:
   as linhas item a item são somadas por produto e por dia, e cada SKU é
@@ -230,6 +239,30 @@ da transação e também o dia operacional. Uma venda às 2h da manhã
 pertence ao movimento da noite anterior. Usar a data da transação jogaria
 esse consumo para o dia seguinte, desalinhando o estoque de todas as
 madrugadas. Vale o dia operacional.
+
+**A coluna "Unidade" da ficha técnica mente.** A planilha da cozinha
+escreve "Gr" em linhas cujo valor é 0,18 e cujo custo bate com o preço
+por quilo. A quantidade está sempre na unidade base, qualquer que seja o
+rótulo — ler a coluna ao pé da letra deixaria toda ficha mil vezes
+errada. O importador ignora o rótulo e avisa quando ele discorda do
+insumo.
+
+**Ficha que cita a si mesma.** Várias abas de "extra" do cardápio
+consomem um ingrediente com o nome da própria aba: "Bombom de Alcatra"
+gasta 0,18 kg de "Bombom de Alcatra". Tratar isso como subreceita entra
+em laço infinito — e, na primeira versão, com a proteção ingênua de
+comparar nomes, fazia a alcatra do prato cair de 0,18 kg para 0,032 kg,
+porque a quantidade era multiplicada por si mesma. Hoje só receita de
+produção serve de subreceita, e a identidade na pilha é o objeto da
+receita, não o nome: "Brownie" existe nas duas planilhas, e o prato
+Brownie de fato consome a produção Brownie.
+
+**Rendimento digitado errado infla o consumo.** A receita da farofa
+declara render 0,03 kg a partir de 1,53 kg de ingredientes. Como a
+explosão da subreceita divide pelo rendimento, esse campo multiplicaria
+o consumo por cinquenta. Quando o rendimento declarado é menor que 60%
+da soma dos ingredientes, vale a soma — e o caso aparece na prévia para
+ser corrigido na planilha.
 
 **Um mapeamento errado era definitivo.** A tela de importação mostrava
 apenas os produtos ainda não mapeados. Quem ligasse um produto ao prato
@@ -386,6 +419,7 @@ estoque-restaurante/
 ├── crud.py           # regras de negócio e cálculo do estoque teórico
 ├── database.py       # esquema e conexão (SQLite ou PostgreSQL)
 ├── auth.py           # login, aprovação de cadastros e permissões
+├── ficha_import.py   # leitura das planilhas de ficha técnica → cadastros
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── seed_demo.py      # gera um banco de demonstração
@@ -397,6 +431,22 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.7 — Ficha técnica por planilha
+
+- Tela **Importar Ficha Técnica**: as duas planilhas da cozinha (pratos
+  finais e produção) viram insumo, prato e receita de uma vez só, com
+  prévia antes de gravar
+- As receitas de produção são **abertas nos ingredientes de compra**: o
+  prato que usa 0,06 kg de molho de queijo passa a descontar o leite, o
+  requeijão e o parmesão que aquele molho consome, na proporção do lote.
+  É o que faz o consumo bater com o que entra pela nota fiscal
+- Mais de duzentas grafias de ingrediente (com erro de digitação e com o
+  mesmo item escrito de dois jeitos) consolidadas numa lista curada de
+  insumos genéricos
+- A ficha do prato importado é substituída, não somada: insumo que saiu
+  da receita para de ser descontado
+- Primeira carga: 101 insumos, 64 pratos e 536 linhas de ficha técnica
 
 ### v0.6 — App no ar
 
