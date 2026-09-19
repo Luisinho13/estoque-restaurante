@@ -72,6 +72,50 @@ desperdício — a diferença entre o teórico e o real.
 
 ![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
 
+## Acesso e usuários
+
+O sistema tem login. A primeira tela pede usuário e senha, e nenhuma
+página é montada antes disso — quem não entrou não chega a lugar nenhum.
+
+**O cadastro é aberto, a entrada não.** Qualquer pessoa pode pedir acesso
+pela aba "Criar cadastro", mas o pedido nasce *pendente*: a senha até
+confere no login, só que a entrada fica barrada até um administrador
+aprovar. Isso mantém o controle de quem usa o sistema sem obrigar o
+administrador a criar conta para cada pessoa na mão.
+
+**Cada um enxerga só o que é dele.** Ao aprovar um cadastro, o
+administrador marca quais das dez áreas aquela pessoa vai acessar —
+Dashboard, Painel de Estoque, Insumos, Pratos, Ficha Técnica, Lançar
+Compra, Importar Nota Fiscal, Importar Vendas (PDV), Lançar Venda do Dia
+e Contagem Física. A sugestão inicial é só as duas primeiras: consulta,
+sem mexer no estoque.
+
+O filtro não é cosmético. As páginas de áreas não liberadas nem chegam a
+ser registradas na navegação, então não adianta digitar a URL — a rota
+não existe para aquele usuário. Esconder apenas o item do menu seria
+fachada.
+
+**Telas de administração** (só para quem é admin):
+
+- *Aprovação de cadastros* — a fila de pendentes, com as áreas já
+  escolhidas antes de liberar. Dá para recusar, e reconsiderar depois
+- *Usuários e acessos* — cada usuário em um cartão, com suas áreas em
+  caixas de seleção, além de promover a administrador, redefinir senha e
+  excluir. Tem também um atalho para criar um usuário já aprovado
+
+**Telas de usuário** (todos): *Minha conta* mostra o perfil, as áreas
+liberadas e permite trocar a própria senha.
+
+> As senhas nunca são gravadas em texto puro. Cada usuário tem um salt
+> aleatório e o que fica no banco é o PBKDF2-SHA256 da senha com esse
+> salt, conferido com `compare_digest`. Um vazamento do arquivo do banco
+> não entrega as senhas.
+
+Uma trava vale nota: **não é possível remover o último administrador.** O
+botão de rebaixar fica desabilitado quando só existe um admin aprovado.
+Sem isso, um clique deixaria o sistema sem ninguém capaz de aprovar
+cadastros ou liberar acessos, e não haveria como voltar pela interface.
+
 ## Decisões que valem nota
 
 Quatro detalhes que não são óbvios e custaram tempo:
@@ -136,6 +180,7 @@ estoque-restaurante/
 ├── app.py            # interface Streamlit (dashboard e telas)
 ├── crud.py           # regras de negócio e cálculo do estoque teórico
 ├── database.py       # esquema do banco
+├── auth.py           # login, aprovação de cadastros e permissões
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── seed_demo.py      # gera um banco de demonstração
@@ -145,8 +190,50 @@ estoque-restaurante/
 
 Python, SQLite (arquivo local, sem servidor) e Streamlit.
 
+## Patch notes
+
+### v0.3 — Cadastro de usuários com aprovação
+
+- Aba **"Criar cadastro"** na tela de login. O pedido nasce pendente e
+  não dá acesso a nada até um administrador aprovar
+- Tela **Aprovação de cadastros**: fila de pendentes, com escolha das
+  áreas na hora de aprovar, recusa e reconsideração
+- Tela **Usuários e acessos**: áreas liberadas por usuário, promoção a
+  administrador, redefinição de senha, exclusão e cadastro direto já
+  aprovado
+- Tela **Minha conta**, para qualquer usuário ver seu perfil e trocar a
+  própria senha
+- Navegação montada a partir das permissões: a rota de uma área não
+  liberada não é registrada, então a URL direta também não abre
+- Trava impedindo remover o último administrador
+- Alterações de acesso valem na interação seguinte, sem precisar sair e
+  entrar de novo
+
+### v0.2 — Login
+
+- Tela de login antes do sistema, com `st.stop()` barrando tudo que vem
+  depois
+- Senhas guardadas como PBKDF2-SHA256 com salt aleatório por usuário
+- Identificação de quem está conectado e botão de sair na barra lateral
+
+### v0.1 — O sistema
+
+- Cálculo do estoque teórico a partir de contagem física, compras e
+  vendas, eliminando a contagem semanal
+- Cadastros de insumos, pratos e ficha técnica
+- Compras manuais e por importação de XML de NF-e, com mapeamento de
+  produto do fornecedor para insumo e fator de conversão
+- Vendas manuais e por importação da planilha do PDV (Zig), somando as
+  linhas item a item por produto e por dia
+- Dashboard com indicadores, consumo por insumo, curva de vendas e
+  ranking de pratos
+- Tela "O que acaba primeiro", com estimativa de dias restantes por
+  insumo
+- Registro da contagem física mensal como nova base do cálculo
+
 ## Próximos passos
 
+- Publicar na nuvem, com o banco hospedado no lugar do arquivo local
 - Histórico de perdas por reconciliação (diferença entre o teórico e a
   contagem física)
 - Exportação de relatórios mensais
