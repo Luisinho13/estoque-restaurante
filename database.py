@@ -10,6 +10,7 @@ Estrutura:
 - vendas_diarias: quantos de cada prato foram vendidos em um dia
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
 - usuarios: quem pode entrar no sistema (senha guardada como hash, nunca em texto)
+- permissoes: quais áreas do app cada usuário pode abrir
 """
 
 import os
@@ -84,7 +85,19 @@ def criar_tabelas():
             usuario TEXT NOT NULL UNIQUE,
             senha_hash TEXT NOT NULL,          -- PBKDF2-SHA256, em hexadecimal
             salt TEXT NOT NULL,                -- salt aleatório por usuário, em hexadecimal
-            criado_em TEXT NOT NULL            -- formato YYYY-MM-DD
+            criado_em TEXT NOT NULL,           -- formato YYYY-MM-DD
+            nome TEXT,                         -- nome de quem usa, só pra leitura humana
+            papel TEXT NOT NULL DEFAULT 'usuario',    -- 'admin' ou 'usuario'
+            status TEXT NOT NULL DEFAULT 'pendente',  -- 'pendente', 'aprovado' ou 'recusado'
+            decidido_em TEXT,                  -- quando o admin aprovou ou recusou
+            decidido_por TEXT                  -- qual admin decidiu
+        );
+
+        CREATE TABLE IF NOT EXISTS permissoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+            area TEXT NOT NULL,                -- chave da área, ver AREAS em auth.py
+            UNIQUE(usuario_id, area)
         );
 
         CREATE TABLE IF NOT EXISTS mapeamento_produtos_zig (
@@ -107,9 +120,30 @@ def criar_tabelas():
         """
     )
 
+    _migrar_colunas_de_usuarios(cursor)
+
     conn.commit()
     conn.close()
     print(f"Banco de dados criado/atualizado em: {DB_PATH}")
+
+
+def _migrar_colunas_de_usuarios(cursor):
+    """Adiciona as colunas de papel/aprovação em bancos criados antes delas.
+
+    O CREATE TABLE acima só vale para bancos novos; um banco que já existia
+    ficaria sem as colunas e o app quebraria ao ler 'papel' ou 'status'.
+    """
+    existentes = {linha[1] for linha in cursor.execute("PRAGMA table_info(usuarios)")}
+    novas = {
+        "nome": "TEXT",
+        "papel": "TEXT NOT NULL DEFAULT 'usuario'",
+        "status": "TEXT NOT NULL DEFAULT 'pendente'",
+        "decidido_em": "TEXT",
+        "decidido_por": "TEXT",
+    }
+    for coluna, tipo in novas.items():
+        if coluna not in existentes:
+            cursor.execute(f"ALTER TABLE usuarios ADD COLUMN {coluna} {tipo}")
 
 
 if __name__ == "__main__":

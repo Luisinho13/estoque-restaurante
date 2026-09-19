@@ -30,35 +30,339 @@ COR = "#2E7D6F"
 COR_ALERTA = "#C1443F"
 
 
-# ---------- Login ----------
+# ---------- Login e cadastro ----------
+
+def _cabecalho_login():
+    st.markdown(
+        f"<h1 style='text-align:center; color:{COR}; margin-bottom:0'>📦 Estoque</h1>"
+        "<p style='text-align:center; color:#6b7280; margin-top:4px'>"
+        "Sistema de estoque do restaurante</p>",
+        unsafe_allow_html=True,
+    )
+
+
+def _aba_entrar():
+    with st.form("login"):
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+
+    if not entrar:
+        return
+
+    dado = auth.autenticar(usuario.strip(), senha)
+    if not dado:
+        st.error("Usuário ou senha incorretos.")
+    elif dado["status"] == "pendente":
+        st.warning(
+            "Seu cadastro ainda está aguardando aprovação do administrador. "
+            "Assim que ele liberar, você consegue entrar com esses mesmos dados."
+        )
+    elif dado["status"] == "recusado":
+        st.error("Este cadastro foi recusado. Procure o administrador.")
+    else:
+        st.session_state["usuario"] = dado["usuario"]
+        st.rerun()
+
+
+def _aba_cadastrar():
+    st.caption(
+        "O cadastro é enviado para aprovação do administrador. "
+        "Você só consegue entrar depois que ele liberar o acesso."
+    )
+    with st.form("cadastro"):
+        nome = st.text_input("Seu nome")
+        usuario = st.text_input("Usuário desejado")
+        senha = st.text_input("Senha", type="password")
+        confirmacao = st.text_input("Repita a senha", type="password")
+        enviar = st.form_submit_button(
+            "Enviar cadastro", type="primary", use_container_width=True
+        )
+
+    if not enviar:
+        return
+
+    usuario = usuario.strip()
+    if not nome.strip() or not usuario or not senha:
+        st.error("Preencha nome, usuário e senha.")
+    elif senha != confirmacao:
+        st.error("As duas senhas não são iguais.")
+    elif len(senha) < 6:
+        st.error("A senha precisa ter pelo menos 6 caracteres.")
+    elif auth.existe_usuario(usuario):
+        st.error("Já existe alguém com esse usuário. Escolha outro.")
+    else:
+        auth.cadastrar_usuario(usuario, senha, nome=nome.strip())
+        st.success(
+            "Cadastro enviado. Avise o administrador para aprovar o seu acesso."
+        )
+
 
 def tela_login():
-    """Pede usuário e senha. Nada do sistema é montado antes disso passar."""
-    st.markdown("<div style='height: 8vh'></div>", unsafe_allow_html=True)
+    """Login e cadastro. Nada do sistema é montado antes disso passar."""
+    st.markdown("<div style='height: 6vh'></div>", unsafe_allow_html=True)
     _, meio, _ = st.columns([1, 1.2, 1])
     with meio:
-        st.markdown(
-            f"<h1 style='text-align:center; color:{COR}; margin-bottom:0'>📦 Estoque</h1>"
-            "<p style='text-align:center; color:#6b7280; margin-top:4px'>"
-            "Entre para acessar o sistema</p>",
-            unsafe_allow_html=True,
-        )
-        with st.form("login"):
-            usuario = st.text_input("Usuário")
-            senha = st.text_input("Senha", type="password")
-            entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
-
-        if entrar:
-            if auth.verificar_login(usuario.strip(), senha):
-                st.session_state["usuario"] = usuario.strip()
-                st.rerun()
-            else:
-                st.error("Usuário ou senha incorretos.")
+        _cabecalho_login()
+        aba_entrar, aba_cadastrar = st.tabs(["Entrar", "Criar cadastro"])
+        with aba_entrar:
+            _aba_entrar()
+        with aba_cadastrar:
+            _aba_cadastrar()
 
 
 if not st.session_state.get("usuario"):
     tela_login()
     st.stop()
+
+# Quem está logado é relido a cada execução: se o admin mudar o acesso de
+# alguém, a mudança vale na próxima interação, sem precisar sair e entrar.
+USUARIO = auth.buscar_usuario(st.session_state["usuario"])
+if not USUARIO or USUARIO["status"] != "aprovado":
+    st.session_state.pop("usuario", None)
+    st.warning("Seu acesso foi alterado pelo administrador. Entre novamente.")
+    st.stop()
+
+E_ADMIN = USUARIO["papel"] == "admin"
+MINHAS_AREAS = auth.permissoes_de(USUARIO["usuario"])
+
+
+# ---------- Minha conta ----------
+
+def pagina_minha_conta():
+    st.title("Minha conta")
+
+    st.subheader("Seus dados")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Usuário", USUARIO["usuario"])
+    col2.metric("Nome", USUARIO["nome"] or "—")
+    col3.metric("Perfil", "Administrador" if E_ADMIN else "Usuário")
+    st.caption(f"Cadastrado em {USUARIO['criado_em']}")
+
+    st.divider()
+    st.subheader("Áreas que você acessa")
+    if E_ADMIN:
+        st.success("Como administrador, você tem acesso a todas as áreas do sistema.")
+    else:
+        liberadas = [rotulo for chave, rotulo in auth.AREAS.items() if chave in MINHAS_AREAS]
+        if liberadas:
+            st.write("\n".join(f"- {rotulo}" for rotulo in liberadas))
+        else:
+            st.info("Nenhuma área liberada ainda. Peça ao administrador.")
+        st.caption("Para pedir acesso a outra área, fale com o administrador.")
+
+    st.divider()
+    st.subheader("Trocar minha senha")
+    with st.form("trocar_senha"):
+        atual = st.text_input("Senha atual", type="password")
+        nova = st.text_input("Nova senha", type="password")
+        confirmacao = st.text_input("Repita a nova senha", type="password")
+        trocar = st.form_submit_button("Salvar nova senha", type="primary")
+
+    if trocar:
+        if not auth.autenticar(USUARIO["usuario"], atual):
+            st.error("A senha atual está incorreta.")
+        elif nova != confirmacao:
+            st.error("As duas senhas novas não são iguais.")
+        elif len(nova) < 6:
+            st.error("A senha precisa ter pelo menos 6 caracteres.")
+        else:
+            auth.alterar_senha(USUARIO["usuario"], nova)
+            st.success("Senha alterada.")
+
+
+# ---------- Admin: aprovação de cadastros ----------
+
+def pagina_aprovacoes():
+    st.title("Aprovação de cadastros")
+    st.caption("Ninguém entra no sistema sem passar por aqui.")
+
+    pendentes = auth.listar_usuarios(status="pendente")
+    if not pendentes:
+        st.success("Nenhum cadastro aguardando aprovação.")
+    else:
+        st.info(f"{len(pendentes)} cadastro(s) aguardando sua decisão.")
+
+    for pendente in pendentes:
+        with st.container(border=True):
+            st.markdown(f"**{pendente['nome'] or pendente['usuario']}**")
+            st.caption(
+                f"Usuário: `{pendente['usuario']}` · solicitado em {pendente['criado_em']}"
+            )
+            areas = st.multiselect(
+                "Áreas que este usuário poderá acessar",
+                options=list(auth.AREAS),
+                default=auth.AREAS_PADRAO,
+                format_func=lambda chave: auth.AREAS[chave],
+                key=f"areas_pendente_{pendente['id']}",
+            )
+            col_aprovar, col_recusar = st.columns(2)
+            if col_aprovar.button(
+                "Aprovar", key=f"aprovar_{pendente['id']}", type="primary",
+                use_container_width=True,
+            ):
+                auth.aprovar_usuario(pendente["usuario"], USUARIO["usuario"], areas)
+                st.success(f"{pendente['usuario']} aprovado.")
+                st.rerun()
+            if col_recusar.button(
+                "Recusar", key=f"recusar_{pendente['id']}", use_container_width=True
+            ):
+                auth.recusar_usuario(pendente["usuario"], USUARIO["usuario"])
+                st.warning(f"{pendente['usuario']} recusado.")
+                st.rerun()
+
+    recusados = auth.listar_usuarios(status="recusado")
+    if recusados:
+        st.divider()
+        st.subheader("Cadastros recusados")
+        st.caption("Você pode reverter uma recusa aprovando o cadastro de novo.")
+        for recusado in recusados:
+            col_nome, col_botao = st.columns([3, 1])
+            col_nome.write(
+                f"**{recusado['usuario']}** — {recusado['nome'] or 'sem nome'} "
+                f"(recusado em {recusado['decidido_em'] or '—'})"
+            )
+            if col_botao.button(
+                "Reconsiderar", key=f"reconsiderar_{recusado['id']}",
+                use_container_width=True,
+            ):
+                auth.aprovar_usuario(recusado["usuario"], USUARIO["usuario"])
+                st.success(f"{recusado['usuario']} aprovado com acesso básico.")
+                st.rerun()
+
+
+# ---------- Admin: usuários e liberação de acessos ----------
+
+def _cartao_de_usuario(dado):
+    """Um usuário aprovado, com suas áreas, papel e ações do admin."""
+    sou_eu = dado["usuario"] == USUARIO["usuario"]
+    e_admin = dado["papel"] == "admin"
+
+    with st.container(border=True):
+        titulo = f"**{dado['usuario']}**"
+        if dado["nome"]:
+            titulo += f" — {dado['nome']}"
+        if e_admin:
+            titulo += " · 🛡️ administrador"
+        if sou_eu:
+            titulo += " · (você)"
+        st.markdown(titulo)
+
+        if e_admin:
+            st.caption("Administradores acessam todas as áreas automaticamente.")
+        else:
+            areas = st.multiselect(
+                "Áreas liberadas",
+                options=list(auth.AREAS),
+                default=[a for a in dado["areas"] if a in auth.AREAS],
+                format_func=lambda chave: auth.AREAS[chave],
+                key=f"areas_{dado['id']}",
+            )
+            if st.button(
+                "Salvar acessos", key=f"salvar_areas_{dado['id']}", type="primary"
+            ):
+                auth.definir_permissoes(dado["usuario"], areas)
+                st.success(f"Acessos de {dado['usuario']} atualizados.")
+                st.rerun()
+
+        with st.expander("Mais ações"):
+            if e_admin:
+                # Sem esta trava dá para remover o último admin e ninguém
+                # mais consegue aprovar cadastros ou liberar acessos.
+                ultimo_admin = auth.total_de_admins_aprovados() <= 1
+                if st.button(
+                    "Rebaixar para usuário comum",
+                    key=f"rebaixar_{dado['id']}",
+                    disabled=ultimo_admin,
+                    help="O sistema precisa de pelo menos um administrador."
+                    if ultimo_admin else None,
+                ):
+                    auth.definir_papel(dado["usuario"], "usuario")
+                    auth.definir_permissoes(dado["usuario"], auth.AREAS_PADRAO)
+                    st.rerun()
+            else:
+                if st.button("Tornar administrador", key=f"promover_{dado['id']}"):
+                    auth.definir_papel(dado["usuario"], "admin")
+                    st.rerun()
+
+            nova = st.text_input(
+                "Definir nova senha", type="password", key=f"nova_senha_{dado['id']}"
+            )
+            if st.button("Redefinir senha", key=f"redefinir_{dado['id']}"):
+                if len(nova) < 6:
+                    st.error("A senha precisa ter pelo menos 6 caracteres.")
+                else:
+                    auth.alterar_senha(dado["usuario"], nova)
+                    st.success(f"Senha de {dado['usuario']} redefinida.")
+
+            if sou_eu:
+                st.caption("Você não pode excluir o seu próprio usuário.")
+            else:
+                confirmar = st.checkbox(
+                    "Confirmo que quero excluir este usuário",
+                    key=f"confirmar_exclusao_{dado['id']}",
+                )
+                if st.button(
+                    "Excluir usuário", key=f"excluir_{dado['id']}", disabled=not confirmar
+                ):
+                    auth.excluir_usuario(dado["usuario"])
+                    st.warning(f"{dado['usuario']} excluído.")
+                    st.rerun()
+
+
+def pagina_usuarios():
+    st.title("Usuários e acessos")
+    st.caption("Quem usa o sistema e o que cada um pode abrir.")
+
+    aprovados = auth.listar_usuarios(status="aprovado")
+    pendentes = auth.total_pendentes()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Usuários ativos", len(aprovados))
+    col2.metric("Administradores", sum(1 for a in aprovados if a["papel"] == "admin"))
+    col3.metric("Aguardando aprovação", pendentes)
+    if pendentes:
+        st.info("Há cadastros pendentes — resolva na tela Aprovação de cadastros.")
+
+    st.divider()
+    for dado in aprovados:
+        _cartao_de_usuario(dado)
+
+    st.divider()
+    with st.expander("Cadastrar usuário direto (já aprovado)"):
+        st.caption(
+            "Atalho para criar um acesso sem passar pela fila de aprovação — "
+            "útil quando você mesmo está configurando a conta de alguém."
+        )
+        with st.form("novo_usuario_admin"):
+            nome = st.text_input("Nome")
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+            areas = st.multiselect(
+                "Áreas liberadas",
+                options=list(auth.AREAS),
+                default=auth.AREAS_PADRAO,
+                format_func=lambda chave: auth.AREAS[chave],
+            )
+            como_admin = st.checkbox("Criar como administrador")
+            criar = st.form_submit_button("Criar usuário", type="primary")
+
+        if criar:
+            usuario = usuario.strip()
+            if not usuario or not senha:
+                st.error("Preencha usuário e senha.")
+            elif len(senha) < 6:
+                st.error("A senha precisa ter pelo menos 6 caracteres.")
+            elif auth.existe_usuario(usuario):
+                st.error("Já existe alguém com esse usuário.")
+            else:
+                auth.cadastrar_usuario(
+                    usuario, senha, nome=nome.strip() or None,
+                    papel="admin" if como_admin else "usuario",
+                    status="aprovado", areas=areas,
+                )
+                st.success(f"Usuário {usuario} criado e liberado.")
+                st.rerun()
 
 
 # ---------- Helpers de consulta ----------
@@ -982,21 +1286,81 @@ PG_CONTAGEM = st.Page(
     pagina_contagem, title="Contagem Física", icon=":material/fact_check:", url_path="contagem"
 )
 
-navegacao = st.navigation({
-    "Visão geral": [PG_DASHBOARD, PG_PAINEL],
-    "Cadastros": [PG_INSUMOS, PG_PRATOS, PG_FICHA],
-    "Lançamentos": [PG_COMPRA, PG_NFE, PG_ZIG, PG_VENDA, PG_CONTAGEM],
-})
+PG_MINHA_CONTA = st.Page(
+    pagina_minha_conta, title="Minha conta", icon=":material/person:", url_path="minha-conta"
+)
+PG_APROVACOES = st.Page(
+    pagina_aprovacoes, title="Aprovação de cadastros", icon=":material/how_to_reg:",
+    url_path="aprovacoes",
+)
+PG_USUARIOS = st.Page(
+    pagina_usuarios, title="Usuários e acessos", icon=":material/manage_accounts:",
+    url_path="usuarios",
+)
+
+# Cada página só entra no menu se a área dela estiver liberada para quem entrou.
+# Não é só esconder do menu: o Streamlit não registra a rota, então nem
+# digitando a URL o usuário chega numa tela que não é dele.
+PAGINAS_POR_AREA = {
+    "dashboard": PG_DASHBOARD,
+    "painel": PG_PAINEL,
+    "insumos": PG_INSUMOS,
+    "pratos": PG_PRATOS,
+    "ficha": PG_FICHA,
+    "compra": PG_COMPRA,
+    "nfe": PG_NFE,
+    "zig": PG_ZIG,
+    "venda": PG_VENDA,
+    "contagem": PG_CONTAGEM,
+}
+
+
+def _liberadas(*areas):
+    return [PAGINAS_POR_AREA[a] for a in areas if a in MINHAS_AREAS]
+
+
+menu = {}
+if _liberadas("dashboard", "painel"):
+    menu["Visão geral"] = _liberadas("dashboard", "painel")
+if _liberadas("insumos", "pratos", "ficha"):
+    menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha")
+if _liberadas("compra", "nfe", "zig", "venda", "contagem"):
+    menu["Lançamentos"] = _liberadas("compra", "nfe", "zig", "venda", "contagem")
+
+menu["Conta"] = [PG_MINHA_CONTA]
+if E_ADMIN:
+    menu["Administração"] = [PG_APROVACOES, PG_USUARIOS]
+
+# Um usuário aprovado mas ainda sem nenhuma área cai aqui: sem página
+# nenhuma o st.navigation quebraria, então ele fica só com a conta dele.
+if not any(chave in menu for chave in ("Visão geral", "Cadastros", "Lançamentos")):
+    st.session_state["_sem_areas"] = True
+
+navegacao = st.navigation(menu)
 
 with st.sidebar:
     st.divider()
-    st.caption(f"Conectado como **{st.session_state['usuario']}**")
+    rotulo = USUARIO["nome"] or USUARIO["usuario"]
+    st.caption(f"Conectado como **{rotulo}**" + (" · 🛡️ admin" if E_ADMIN else ""))
     if st.button("Sair", icon=":material/logout:", use_container_width=True):
         st.session_state.pop("usuario", None)
         st.rerun()
-    alertas = crud.resumo_dashboard(30)["abaixo_do_minimo"]
-    if alertas:
-        st.error(f"⚠️ {alertas} insumo(s) abaixo do mínimo")
+
+    if E_ADMIN:
+        pendentes = auth.total_pendentes()
+        if pendentes:
+            st.warning(f"👤 {pendentes} cadastro(s) aguardando aprovação")
+
+    if "painel" in MINHAS_AREAS or "dashboard" in MINHAS_AREAS:
+        alertas = crud.resumo_dashboard(30)["abaixo_do_minimo"]
+        if alertas:
+            st.error(f"⚠️ {alertas} insumo(s) abaixo do mínimo")
     st.caption(f"Hoje: {datetime.date.today().strftime('%d/%m/%Y')}")
+
+if st.session_state.pop("_sem_areas", False):
+    st.info(
+        "Seu acesso foi aprovado, mas nenhuma área do sistema foi liberada "
+        "para você ainda. Peça ao administrador."
+    )
 
 navegacao.run()
