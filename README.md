@@ -23,8 +23,8 @@ dados são os do restaurante.
 
 ![Dashboard do sistema](docs/dashboard.png)
 
-> As telas deste README usam o banco de demonstração gerado por
-> `seed_demo.py`, com dados fictícios.
+> As telas deste README são da demonstração pública, com os dados
+> fictícios gerados pelo `seed_demo.py`.
 
 ## O problema
 
@@ -122,6 +122,8 @@ não olhar.
   percentual do que estava disponível
 
 ![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
+
+![Tela de Perdas e Reconciliação](docs/perdas.png)
 
 ## Acesso e usuários
 
