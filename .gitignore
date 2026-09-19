@@ -3,6 +3,9 @@ estoque.db
 estoque.db.bak*
 estoque_demo.db
 
+# Credenciais do banco na nuvem (NUNCA vão pro repositório)
+.streamlit/secrets.toml
+
 # Cache do Python
 __pycache__/
 *.pyc

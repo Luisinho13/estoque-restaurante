@@ -88,9 +88,13 @@ def cadastrar_usuario(usuario: str, senha: str, nome: str = None,
     """Cadastra um usuário. Erra se o nome de usuário já existir."""
     salt = os.urandom(16)
     conn = get_connection()
-    cursor = conn.execute(
+    # RETURNING no lugar de lastrowid, e ON CONFLICT no lugar de
+    # INSERT OR IGNORE: os dois funcionam tanto no SQLite quanto no
+    # Postgres, então a mesma consulta serve para local e nuvem.
+    linha = conn.execute(
         """INSERT INTO usuarios (usuario, senha_hash, salt, criado_em, nome, papel, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           RETURNING id""",
         (
             usuario,
             _hash_senha(senha, salt),
@@ -100,11 +104,12 @@ def cadastrar_usuario(usuario: str, senha: str, nome: str = None,
             papel,
             status,
         ),
-    )
-    usuario_id = cursor.lastrowid
+    ).fetchone()
+    usuario_id = linha["id"]
     for area in areas or []:
         conn.execute(
-            "INSERT OR IGNORE INTO permissoes (usuario_id, area) VALUES (?, ?)",
+            """INSERT INTO permissoes (usuario_id, area) VALUES (?, ?)
+               ON CONFLICT (usuario_id, area) DO NOTHING""",
             (usuario_id, area),
         )
     conn.commit()
