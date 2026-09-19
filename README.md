@@ -143,43 +143,115 @@ renumerar quebraria as ligações — ajusta as sequências do Postgres para
 não colidirem com os ids já usados, e se recusa a rodar sobre um destino
 que já tenha dados, para não misturar duas cargas.
 
-## Decisões que valem nota
+## Problemas que enfrentamos
 
-Seis detalhes que não são óbvios e custaram tempo:
+Esta é a parte que normalmente não aparece num README, e é a que mais
+ensinou. Cada item traz o sintoma, a causa real e o que resolveu.
 
-**SKU é identificador, não texto.** Na Zig, os códigos de produto
-diferenciam maiúsculas: `Fe` é Arroz Extra e `FE` é Pão Extra. O
-instinto de normalizar tudo para maiúscula faria um sobrescrever o
-outro silenciosamente, sem erro nenhum — o sistema seguiria rodando,
-descontando pão quando alguém pedisse arroz.
+### No cálculo do estoque
 
-**A data certa não é a óbvia.** A planilha traz o horário da transação
-e o dia operacional. Uma venda às 2h da manhã pertence ao movimento da
-noite anterior, então é o dia operacional que vale — usar o outro joga
-o consumo para o dia seguinte.
+**O estoque ignorava as vendas do dia da contagem.** Logo depois de
+registrar uma contagem física, o estoque aparecia maior do que era. A
+causa estava numa única letra: a consulta somava compras e descontava
+consumo com `data > contagem`, e não `>=`. As vendas feitas no mesmo dia
+da contagem caíam fora da conta e simplesmente sumiam. Trocar `>` por
+`>=` resolveu. É um erro que não dá erro — o sistema segue rodando e
+entregando um número errado com toda a confiança.
 
-**Importar substitui, não soma.** Reimportar o mesmo relatório corrige
-o dia em vez de duplicar os lançamentos. Isso veio de um bug real: um
-prato descontava 3 em vez de 1, e a causa eram três cliques no botão
-gerando três registros idênticos. O erro estava nos dados, não na conta.
+**Um prato descontava 3 em vez de 1.** O sintoma era o estoque caindo o
+triplo do esperado depois de lançar uma venda. A ficha técnica estava
+certa (a tabela tem `UNIQUE(prato_id, insumo_id)`, o que descarta ficha
+duplicada), e a conta também. O problema estava nos dados: reenviar o
+formulário — um clique duplo, um F5 — inseria várias linhas idênticas em
+`vendas_diarias`, e cada uma descontava do estoque. Hoje o app checa se
+já existe lançamento para aquele prato naquele dia e pede confirmação
+explícita antes de somar por cima. A importação do PDV segue a mesma
+ideia por outro caminho: ela **substitui** as vendas do dia em vez de
+somar, então reimportar o mesmo relatório corrige o dia sem duplicar
+nada.
 
-**A comparação de datas usa `>=`, não `>`.** Vendas feitas no mesmo dia
-da contagem física precisam ser descontadas. Com `>` elas sumiam da
-conta — outro bug que já aconteceu.
+> Vale o registro honesto: o caso nunca foi reproduzido em condições
+> controladas. Quando o banco foi inspecionado, já estava consistente. A
+> correção ataca a causa mais provável, e o sintoma não voltou — mas se
+> voltar, o primeiro lugar a olhar é se há várias linhas em
+> `vendas_diarias` para o mesmo prato e a mesma data.
 
-**Consulta em laço é lentidão escondida.** O cálculo do estoque de todos
-os insumos chamava, para cada um, a função que calcula um só: quatro
-consultas por insumo, 109 no total. Num arquivo local cada consulta custa
-microssegundos e ninguém percebe. Contra um banco remoto, a mesma tela
-passou a levar 27 segundos. O problema sempre esteve no código — foi a
-rede que o tornou visível. Hoje é uma consulta só, e o Dashboard abre em
-2 segundos.
+**O dashboard acusava erro onde não havia.** Todo insumo sem nenhuma
+contagem física parte do zero, então a primeira venda já o deixa
+negativo. Isso é o comportamento esperado, não um defeito. Só que o
+alerta era o mesmo do negativo de verdade, e mandava procurar compra não
+lançada ou ficha técnica errada quando faltava apenas registrar a
+contagem inicial. Os dois casos agora são contados e exibidos separados.
 
-**Ordenação sem desempate não é ordenação.** O feed de movimentações
-ordenava por data e tipo. Como todas as vendas de um dia têm a mesma data
-e o mesmo tipo, o `LIMIT` cortava linhas diferentes a cada execução, e
-SQLite e Postgres discordavam entre si. Foi a única divergência que
-apareceu ao comparar os dois bancos lado a lado.
+### Na importação de dados
+
+**`Fe` e `FE` são produtos diferentes.** Os códigos de produto do PDV
+diferenciam maiúsculas de minúsculas: um é Arroz Extra, o outro é Pão
+Extra. O instinto de normalizar tudo para maiúscula ao comparar faria um
+sobrescrever o outro em silêncio, sem erro nenhum — o sistema continuaria
+funcionando, descontando pão toda vez que alguém pedisse arroz. O SKU é
+tratado como identificador, não como texto.
+
+**A coluna de data óbvia é a errada.** A planilha do PDV traz o horário
+da transação e também o dia operacional. Uma venda às 2h da manhã
+pertence ao movimento da noite anterior. Usar a data da transação jogaria
+esse consumo para o dia seguinte, desalinhando o estoque de todas as
+madrugadas. Vale o dia operacional.
+
+**Um mapeamento errado era definitivo.** A tela de importação mostrava
+apenas os produtos ainda não mapeados. Quem ligasse um produto ao prato
+errado não tinha como voltar atrás pela interface — só apagando o prato
+inteiro. Hoje a tela lista também os mapeamentos já salvos e permite
+trocar o prato, marcar o item como não controlado ou remover o
+mapeamento, devolvendo o produto à fila de pendentes.
+
+### Na ida para a nuvem
+
+**O banco escolhido primeiro não instalava.** A escolha inicial foi um
+SQLite hospedado, pela vantagem de manter o mesmo dialeto e não mexer nas
+consultas. Só que o cliente Python não tem pacote pronto para a versão de
+Python da máquina e exige compilar com a toolchain do Rust. Testar
+localmente antes de publicar ficaria impossível, e os erros apareceriam
+em produção, com o restaurante usando. A escolha mudou para PostgreSQL,
+que instalou de primeira. O argumento original — preservar os `?` das
+consultas — foi resolvido de outro jeito: uma tradução automática dentro
+do `database.py`, que deixou as consultas e o `crud.py` intactos.
+
+**O tradutor engoliu um caractere especial.** A primeira versão trocava
+`?` por `%s` mas não escapava o `%`. Como o driver do Postgres varre a
+consulta inteira procurando marcador, sem saber o que é literal, qualquer
+texto com `%` quebraria a consulta. Pego antes de ir para produção, com
+um teste que passava justamente uma string dessas.
+
+**Uma tela levava 27 segundos para abrir.** Esse foi o susto da migração.
+O cálculo do estoque de todos os insumos chamava, para cada insumo, a
+função que calcula um só: quatro consultas por insumo, 109 no total. Num
+arquivo local cada consulta custa microssegundos e ninguém percebe.
+Contra um banco remoto, a 246 ms por ida e volta, a mesma tela virou meio
+minuto de espera. **O problema sempre esteve no código — foi a rede que o
+tornou visível.** Reescrito para uma consulta só, o Dashboard caiu para
+2,1s e o Painel para 0,9s. A conta é a mesma; foi conferida insumo a
+insumo, nos cinco campos de cada um, contra a versão antiga.
+
+**Os dois bancos discordavam entre si.** Ao comparar o SQLite e o
+Postgres lado a lado, tudo batia menos o feed de movimentações recentes.
+A ordenação era por data e tipo, sem desempate. Como todas as vendas de
+um dia têm a mesma data e o mesmo tipo, o `LIMIT` cortava linhas
+diferentes em cada banco. Era um defeito latente também no SQLite — o
+feed podia mudar de ordem sem motivo visível. Um terceiro critério na
+ordenação resolveu.
+
+### O fio que liga todos
+
+Quase nenhum desses problemas deu mensagem de erro. O estoque errado, o
+desconto triplicado, o produto trocado, o feed instável: em todos, o
+sistema seguiu rodando e entregando um resultado — só que o resultado
+errado. Num sistema que existe para dizer quanto sobrou, um número errado
+com cara de certo é pior do que uma tela de erro.
+
+Por isso a conferência virou rotina: comparar a versão nova com a antiga
+linha a linha, comparar os dois bancos campo a campo, e desconfiar
+especialmente do que funciona sem reclamar.
 
 ## Como rodar
 
@@ -282,6 +354,8 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 - Migração conferida comparando os dois bancos lado a lado: resumo,
   estoque, consumo, cobertura, vendas, pratos, movimentações, mapeamentos
   e usuários, todos idênticos
+- README com a seção "Problemas que enfrentamos", reunindo os bugs e
+  armadilhas de todas as etapas do projeto
 
 ### v0.3 — Cadastro de usuários com aprovação
 
