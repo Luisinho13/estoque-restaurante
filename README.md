@@ -7,10 +7,18 @@ toda segunda-feira e vira uma conferência mensal.
 Projeto pessoal, criado para um problema real do restaurante onde
 trabalho como comprador.
 
-**O sistema está no ar:**
+**▶️ Demonstração, sem cadastro:**
+https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
+
+Entra direto e dá para mexer em tudo — lançar venda, importar nota,
+fazer contagem. Os dados são fictícios e voltam ao começo quando o app
+reinicia.
+
+**O sistema de verdade:**
 https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
 
-O link é público, o sistema não — o acesso continua por login.
+Esse link é público, o sistema não — o acesso continua por login, e os
+dados são os do restaurante.
 
 ![Dashboard do sistema](docs/dashboard.png)
 
@@ -403,6 +411,9 @@ público, o sistema não.
 
 ### Publicar uma demonstração pública
 
+A demonstração está no ar em
+https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
+
 O app real fica atrás de login e guarda dado de verdade do restaurante,
 então ele não serve de vitrine. Para mostrar o projeto sem expor nada,
 o mesmo repositório sobe uma segunda vez no Streamlit Community Cloud
@@ -485,6 +496,10 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ### v0.6.1 — Modo demonstração
 
+- Demonstração pública no ar, sem cadastro, em
+  https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
+- `demo.py` é a entrada da vitrine: liga o modo demonstração e chama o
+  `app.py`, para que publicar não dependa de acertar campo no painel
 - `MODO_DEMO` publica o mesmo código como vitrine: dados fictícios,
   sem login e com faixa avisando que nada ali é real
 - O modo demonstração recusa a credencial do Postgres por construção,
