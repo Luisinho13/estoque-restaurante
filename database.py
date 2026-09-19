@@ -34,13 +34,25 @@ from pathlib import Path
 CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
 
 
+LIGADO = ("1", "true", "sim")
+
+
 def modo_demo() -> bool:
     """True quando o app está publicado como vitrine, com dados fictícios.
 
-    É ligado pela variável de ambiente MODO_DEMO no app de demonstração do
-    Streamlit Cloud. O app real não define essa variável.
+    Procura primeiro na variável de ambiente e depois nos secrets, porque o
+    Streamlit Community Cloud não oferece campo de variável de ambiente —
+    lá dentro, a única forma de configurar o app é pelos secrets. O app
+    real não define nenhuma das duas.
     """
-    return os.environ.get("MODO_DEMO", "").strip().lower() in ("1", "true", "sim")
+    if os.environ.get("MODO_DEMO", "").strip().lower() in LIGADO:
+        return True
+    try:
+        import streamlit as st
+
+        return str(st.secrets["MODO_DEMO"]).strip().lower() in LIGADO
+    except Exception:
+        return False
 
 
 # ESTOQUE_DB permite rodar o app sobre outro arquivo (ex: o de demonstração)

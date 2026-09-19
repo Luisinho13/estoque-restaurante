@@ -421,10 +421,12 @@ disco efêmero do Streamlit Cloud — o que os visitantes mexerem se desfaz
 sozinho quando o app dorme e acorda.
 
 No painel do Streamlit Cloud, o app de demonstração aponta para o mesmo
-repositório e o mesmo `app.py`, com **Secrets vazios** e, em *Advanced
-settings*, a variável de ambiente:
+repositório e o mesmo `app.py`. O Community Cloud não tem campo de
+variável de ambiente — a única forma de configurar um app lá é pelos
+secrets — então o conteúdo dos Secrets dele é uma linha só, e nada mais
+(nunca a URL do banco real):
 
-```
+```toml
 MODO_DEMO = "1"
 ```
 
