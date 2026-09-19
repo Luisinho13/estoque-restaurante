@@ -31,9 +31,25 @@ import sqlite3
 import threading
 from pathlib import Path
 
+CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
+
+
+def modo_demo() -> bool:
+    """True quando o app está publicado como vitrine, com dados fictícios.
+
+    É ligado pela variável de ambiente MODO_DEMO no app de demonstração do
+    Streamlit Cloud. O app real não define essa variável.
+    """
+    return os.environ.get("MODO_DEMO", "").strip().lower() in ("1", "true", "sim")
+
+
 # ESTOQUE_DB permite rodar o app sobre outro arquivo (ex: o de demonstração)
-# sem encostar nos dados reais.
-DB_PATH = Path(os.environ.get("ESTOQUE_DB") or Path(__file__).parent / "estoque.db")
+# sem encostar nos dados reais. Em modo demonstração o padrão já é o banco
+# fictício, para não depender de configurar a variável certa lá na nuvem.
+DB_PATH = Path(
+    os.environ.get("ESTOQUE_DB")
+    or (CAMINHO_DEMO if modo_demo() else Path(__file__).parent / "estoque.db")
+)
 
 
 def url_do_postgres():
@@ -43,7 +59,15 @@ def url_do_postgres():
     Streamlit, que é como a nuvem entrega a credencial. O import do
     Streamlit é protegido porque este módulo também roda em scripts
     soltos (seed_demo.py, migrar_para_nuvem.py), fora do app.
+
+    Em modo demonstração devolve None de saída, aconteça o que acontecer.
+    É o cinto de segurança da vitrine: mesmo que alguém cole a credencial
+    do banco real nos secrets do app de demonstração, ele não chega nos
+    dados do restaurante — cai no SQLite fictício.
     """
+    if modo_demo():
+        return None
+
     url = os.environ.get("DATABASE_URL")
     if url:
         return url

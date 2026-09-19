@@ -20,6 +20,8 @@ import zig_import
 
 database.criar_tabelas()  # garante que as tabelas existem ao abrir o app
 
+MODO_DEMO = database.modo_demo()
+
 st.set_page_config(
     page_title="Estoque do Restaurante",
     page_icon="📦",
@@ -120,6 +122,47 @@ def tela_login():
         with aba_cadastrar:
             _aba_cadastrar()
 
+
+# ---------- Modo demonstração ----------
+
+@st.cache_resource
+def _semear_demonstracao():
+    """Cria os dados fictícios na primeira vez que a vitrine sobe.
+
+    O disco do Streamlit Cloud é efêmero: quando o app dorme e acorda, o
+    arquivo some e esta função roda de novo. Na demonstração isso é
+    vantagem — o que os visitantes bagunçarem se desfaz sozinho.
+
+    O `cache_resource` faz isso valer uma vez por processo, e não a cada
+    interação de cada visitante.
+    """
+    conn = database.get_connection()
+    vazio = conn.execute("SELECT COUNT(*) AS n FROM insumos").fetchone()["n"] == 0
+    conn.close()
+    if vazio:
+        import seed_demo
+
+        seed_demo.main()
+    return True
+
+
+def _entrar_como_visitante():
+    """Pula o login na vitrine, entrando com o usuário fictício do seed."""
+    import seed_demo
+
+    if not auth.buscar_usuario(seed_demo.USUARIO_DEMO):
+        auth.cadastrar_usuario(
+            seed_demo.USUARIO_DEMO, seed_demo.SENHA_DEMO,
+            nome="Usuário de demonstração", papel="admin",
+            status="aprovado", areas=list(auth.AREAS),
+        )
+    st.session_state["usuario"] = seed_demo.USUARIO_DEMO
+
+
+if MODO_DEMO:
+    _semear_demonstracao()
+    if not st.session_state.get("usuario"):
+        _entrar_como_visitante()
 
 if not st.session_state.get("usuario"):
     tela_login()
@@ -1697,13 +1740,29 @@ if not any(chave in menu for chave in ("Visão geral", "Cadastros", "Lançamento
 
 navegacao = st.navigation(menu)
 
+if MODO_DEMO:
+    st.warning(
+        "**Ambiente de demonstração.** Os dados são fictícios e o login está "
+        "desligado de propósito, para você olhar à vontade. Pode lançar venda, "
+        "importar nota e fazer contagem — nada aqui é um restaurante de "
+        "verdade, e tudo volta ao começo quando o app reinicia.",
+        icon=":material/science:",
+    )
+
 with st.sidebar:
     st.divider()
     rotulo = USUARIO["nome"] or USUARIO["usuario"]
     st.caption(f"Conectado como **{rotulo}**" + (" · 🛡️ admin" if E_ADMIN else ""))
-    if st.button("Sair", icon=":material/logout:", use_container_width=True):
+    # Na vitrine o botão de sair não faria nada visível: o visitante entra
+    # sozinho de novo na interação seguinte.
+    if not MODO_DEMO and st.button("Sair", icon=":material/logout:", use_container_width=True):
         st.session_state.pop("usuario", None)
         st.rerun()
+    if MODO_DEMO:
+        st.caption(
+            "Demonstração com dados fictícios · "
+            "[código no GitHub](https://github.com/Luisinho13/estoque-restaurante)"
+        )
 
     if E_ADMIN:
         pendentes = auth.total_pendentes()

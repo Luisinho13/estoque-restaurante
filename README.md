@@ -401,6 +401,39 @@ O app tem um endereço fixo, acessível de qualquer aparelho pelo
 navegador — sem instalar nada. O login continua valendo: o link é
 público, o sistema não.
 
+### Publicar uma demonstração pública
+
+O app real fica atrás de login e guarda dado de verdade do restaurante,
+então ele não serve de vitrine. Para mostrar o projeto sem expor nada,
+o mesmo repositório sobe uma segunda vez no Streamlit Community Cloud
+com a variável `MODO_DEMO` ligada. Nesse modo o app:
+
+- roda sobre `estoque_demo.db`, com 60 dias de movimento fictício
+  gerado pelo `seed_demo.py` no primeiro acesso;
+- dispensa o login e entra como um usuário de demonstração;
+- mostra uma faixa avisando que ali nada é real.
+
+Duas proteções fazem esse modo ser seguro. A primeira é que
+`url_do_postgres()` devolve `None` de saída quando `MODO_DEMO` está
+ligado: mesmo que a credencial do banco real acabe nos secrets do app de
+demonstração, ele não alcança os dados do restaurante. A segunda é o
+disco efêmero do Streamlit Cloud — o que os visitantes mexerem se desfaz
+sozinho quando o app dorme e acorda.
+
+No painel do Streamlit Cloud, o app de demonstração aponta para o mesmo
+repositório e o mesmo `app.py`, com **Secrets vazios** e, em *Advanced
+settings*, a variável de ambiente:
+
+```
+MODO_DEMO = "1"
+```
+
+Localmente dá para ver o mesmo com:
+
+```bash
+MODO_DEMO=1 streamlit run app.py
+```
+
 ### Primeiros passos num banco vazio
 
 A ordem importa, porque cada etapa depende da anterior:
@@ -447,6 +480,15 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 - A ficha do prato importado é substituída, não somada: insumo que saiu
   da receita para de ser descontado
 - Primeira carga: 101 insumos, 64 pratos e 536 linhas de ficha técnica
+
+### v0.6.1 — Modo demonstração
+
+- `MODO_DEMO` publica o mesmo código como vitrine: dados fictícios,
+  sem login e com faixa avisando que nada ali é real
+- O modo demonstração recusa a credencial do Postgres por construção,
+  para que uma configuração errada não alcance o banco do restaurante
+- Os dados são semeados no primeiro acesso e se desfazem quando o app
+  reinicia, então o visitante pode lançar venda e importar nota à vontade
 
 ### v0.6 — App no ar
 
