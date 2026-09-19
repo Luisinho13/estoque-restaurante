@@ -7,6 +7,11 @@ toda segunda-feira e vira uma conferência mensal.
 Projeto pessoal, criado para um problema real do restaurante onde
 trabalho como comprador.
 
+**O sistema está no ar:**
+https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
+
+O link é público, o sistema não — o acesso continua por login.
+
 ![Dashboard do sistema](docs/dashboard.png)
 
 > As telas deste README usam o banco de demonstração gerado por
@@ -351,11 +356,15 @@ python migrar_para_nuvem.py
 
 ### Publicar no Streamlit Community Cloud
 
+Já publicado, em
+https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app — o que
+segue serve para republicar ou subir uma segunda instância:
+
 1. Suba o repositório para o GitHub
 2. Em share.streamlit.io, conecte o repositório e aponte para `app.py`
 3. Em *Settings → Secrets*, cole o mesmo conteúdo do `secrets.toml`
 
-O app passa a ter um endereço fixo, acessível de qualquer aparelho pelo
+O app tem um endereço fixo, acessível de qualquer aparelho pelo
 navegador — sem instalar nada. O login continua valendo: o link é
 público, o sistema não.
 
@@ -388,6 +397,15 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.6 — App no ar
+
+- Sistema publicado no Streamlit Community Cloud, em
+  https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
+- Acessível de qualquer aparelho pelo navegador, sem instalar nada —
+  o celular no salão e o computador do escritório veem o mesmo estoque
+- Roda sobre o banco na nuvem preparado na v0.4; a URL do Postgres fica
+  nos secrets do Streamlit, não no repositório
 
 ### v0.5 — Perdas e reconciliação
 
@@ -466,7 +484,6 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Próximos passos
 
-- Publicar o app no Streamlit Community Cloud (o banco já está na nuvem)
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
 - Sugestão de compra a partir dos dias de estoque restantes
