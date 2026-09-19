@@ -9,7 +9,9 @@ encostar no banco real. Rodar com:
     python seed_demo.py
     ESTOQUE_DB=estoque_demo.db streamlit run app.py
 
-O banco de demonstração é recriado do zero a cada execução.
+O banco de demonstração é recriado do zero a cada execução, e junto com
+ele um usuário admin de demonstração (demo / demo1234) para conseguir
+entrar no app.
 """
 
 import datetime
@@ -18,8 +20,15 @@ import random
 from pathlib import Path
 
 CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
+
+# O banco é recriado do zero a cada execução, o que apaga também os
+# usuários. Sem recriar um admin aqui, ninguém consegue entrar na
+# demonstração depois de gerá-la. Credencial fictícia, banco fictício.
+USUARIO_DEMO = "demo"
+SENHA_DEMO = "demo1234"
 os.environ["ESTOQUE_DB"] = str(CAMINHO_DEMO)
 
+import auth  # noqa: E402
 import crud  # noqa: E402  (precisa enxergar o ESTOQUE_DB definido acima)
 import database  # noqa: E402
 
@@ -107,6 +116,19 @@ COMPRA_ABAIXO_DO_CONSUMO = {
     "Manteiga": 0.80,
 }
 
+# Quanto some entre uma contagem e a outra, como fração do que estava
+# disponível. Quebra, desperdício, porção maior que a ficha. Os três
+# primeiros são os problemáticos — hortifruti e laticínio estragam, e
+# proteína cara costuma sair da porção. O resto fica na faixa saudável de
+# 1% a 4%, que é o que um restaurante bem tocado costuma perder.
+PERDA_NO_PERIODO = {
+    "Tomate": 0.11,
+    "Alface": 0.14,
+    "Queijo mussarela": 0.08,
+    "Camarão": 0.07,
+}
+PERDA_PADRAO = (0.01, 0.04)
+
 FORNECEDOR = {
     "Contrafilé": "Frigorífico Boi Bom",
     "Peito de frango": "Frigorífico Boi Bom",
@@ -140,35 +162,54 @@ def gerar_vendas():
     return vendas
 
 
-def consumo_desde(vendas, inicio):
-    """Quanto de cada insumo as vendas consomem a partir de uma data."""
+def consumo_entre(vendas, inicio, fim=None):
+    """Consumo de cada insumo no intervalo [inicio, fim).
+
+    O fim é exclusivo de propósito: uma contagem mede o estoque antes dos
+    movimentos do próprio dia, então as vendas do dia da contagem final já
+    pertencem ao período seguinte. É a mesma convenção do crud.py.
+    """
     total = {}
     for prato, quantidade, data in vendas:
-        if data < inicio:
+        if data < inicio or (fim is not None and data >= fim):
             continue
         for insumo, por_prato in FICHAS[prato].items():
             total[insumo] = total.get(insumo, 0) + quantidade * por_prato
     return total
 
 
+def consumo_desde(vendas, inicio):
+    """Atalho para o consumo de uma data em diante."""
+    return consumo_entre(vendas, inicio)
+
+
 def arredondar(valor, unidade):
     return float(round(valor / 10) * 10) if unidade == "un" else round(valor, 1)
 
 
-def gerar_compras(insumo, unidade, alvo):
-    """Divide o total comprado em 3 a 5 entregas espalhadas pelo período."""
+def gerar_compras(insumo, unidade, alvo, inicio=None, duracao=30):
+    """Divide o total comprado em 3 a 5 entregas espalhadas pelo período.
+
+    Devolve quanto foi efetivamente comprado — o arredondamento faz o total
+    entregue diferir do alvo, e quem fecha a conta da contagem precisa do
+    número real, não do pretendido.
+    """
+    inicio = inicio or DIA_CONTAGEM
     entregas = random.randint(3, 5)
-    dias = sorted(random.sample(range(1, 30), entregas))
+    dias = sorted(random.sample(range(1, duracao), entregas))
     por_entrega = alvo / entregas
+    comprado = 0.0
     for dia in dias:
         quantidade = arredondar(por_entrega * random.uniform(0.85, 1.15), unidade)
         if quantidade > 0:
             crud.registrar_compra(
                 insumo,
                 quantidade,
-                str(DIA_CONTAGEM + datetime.timedelta(days=dia)),
+                str(inicio + datetime.timedelta(days=dia)),
                 FORNECEDOR[insumo],
             )
+            comprado += quantidade
+    return comprado
 
 
 def main():
@@ -179,6 +220,10 @@ def main():
 
     vendas = gerar_vendas()
     consumo_periodo = consumo_desde(vendas, DIA_CONTAGEM)
+    # O primeiro período é o que a tela de perdas reconcilia, então ele
+    # precisa fechar de verdade: estoque inicial, compras e vendas que se
+    # combinam, e uma perda plausível explicando o que falta.
+    consumo_anterior = consumo_entre(vendas, DIA_CONTAGEM_ANTERIOR, DIA_CONTAGEM)
 
     for nome, unidade in INSUMOS:
         media_diaria = consumo_periodo.get(nome, 0) / 30
@@ -194,16 +239,36 @@ def main():
 
     for nome, unidade in INSUMOS:
         media_diaria = consumo_periodo.get(nome, 0) / 30
-        contado = arredondar(media_diaria * DIAS_NA_CONTAGEM, unidade)
+        inicial = arredondar(media_diaria * DIAS_NA_CONTAGEM, unidade)
         crud.registrar_contagem_fisica(
-            nome, contado, str(DIA_CONTAGEM_ANTERIOR), "Contagem mensal"
+            nome, inicial, str(DIA_CONTAGEM_ANTERIOR), "Contagem mensal"
         )
-        crud.registrar_contagem_fisica(nome, contado, str(DIA_CONTAGEM), "Contagem mensal")
 
+        # Primeiro período: compra para repor o que foi consumido, e o que
+        # sobra na contagem seguinte é o que restou depois da perda.
+        gasto = consumo_anterior.get(nome, 0)
+        comprado = gerar_compras(
+            nome, unidade, gasto * random.uniform(0.95, 1.15),
+            inicio=DIA_CONTAGEM_ANTERIOR, duracao=(DIA_CONTAGEM - DIA_CONTAGEM_ANTERIOR).days,
+        )
+        disponivel = inicial + comprado
+        taxa = PERDA_NO_PERIODO.get(nome, random.uniform(*PERDA_PADRAO))
+        sobra = max(disponivel - gasto - disponivel * taxa, 0)
+        crud.registrar_contagem_fisica(
+            nome, arredondar(sobra, unidade), str(DIA_CONTAGEM), "Contagem mensal"
+        )
+
+        # Segundo período: em aberto, é o que alimenta o "o que acaba primeiro".
         proporcao = COMPRA_ABAIXO_DO_CONSUMO.get(nome, random.uniform(1.0, 1.25))
         gerar_compras(nome, unidade, consumo_periodo.get(nome, 0) * proporcao)
 
+    auth.cadastrar_usuario(
+        USUARIO_DEMO, SENHA_DEMO, nome="Usuário de demonstração",
+        papel="admin", status="aprovado", areas=list(auth.AREAS),
+    )
+
     print(f"Banco de demonstração criado em: {CAMINHO_DEMO}")
+    print(f"Entre no app com  usuário: {USUARIO_DEMO}  senha: {SENHA_DEMO}")
     print(f"{len(INSUMOS)} insumos, {len(FICHAS)} pratos, {len(vendas)} lançamentos de venda\n")
     print(f"{'Insumo':<20} {'Estoque':>9} {'Mínimo':>9} {'Dias':>7}  Status")
     for linha in sorted(

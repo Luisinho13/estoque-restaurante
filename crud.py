@@ -605,3 +605,175 @@ def movimentacoes_recentes(limite: int = 15) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(linha) for linha in linhas]
+
+
+# ---------- Reconciliação de perdas ----------
+
+# Entre duas contagens físicas dá para fechar a conta do que aconteceu com
+# um insumo. Tudo que estava disponível no período teve um de três
+# destinos, e os três somam exatamente o que havia:
+#
+#     disponível  =  estoque inicial + compras
+#     disponível  =  consumo + sobra + perda
+#
+# O consumo é o teórico (vendas × ficha técnica) e a sobra é a contagem
+# seguinte. A perda é o que falta para fechar: quebra, desperdício, porção
+# maior que a ficha, furo. É o número que a contagem mensal existe para
+# revelar, e ele só aparece quando há duas contagens do mesmo insumo.
+#
+# Sobre as datas: o período vai de uma contagem (inclusive) até a seguinte
+# (exclusive). Isso segue a convenção do resto do sistema — uma contagem
+# mede o estoque antes dos movimentos do próprio dia, e por isso os
+# movimentos do dia da contagem final já pertencem ao período seguinte.
+SQL_RECONCILIACAO = """
+    WITH periodos AS (
+        SELECT
+            c.insumo_id,
+            c.data AS inicio,
+            c.quantidade_contada AS estoque_inicial,
+            LEAD(c.data) OVER (
+                PARTITION BY c.insumo_id ORDER BY c.data, c.id
+            ) AS fim,
+            LEAD(c.quantidade_contada) OVER (
+                PARTITION BY c.insumo_id ORDER BY c.data, c.id
+            ) AS estoque_final
+        FROM contagens_fisicas c
+    )
+    SELECT
+        i.nome AS insumo,
+        i.unidade_medida,
+        p.inicio,
+        p.fim,
+        p.estoque_inicial,
+        p.estoque_final,
+        COALESCE((
+            SELECT SUM(co.quantidade) FROM compras co
+            WHERE co.insumo_id = p.insumo_id
+              AND co.data >= p.inicio AND co.data < p.fim
+        ), 0) AS compras,
+        COALESCE((
+            SELECT SUM(v.quantidade * ft.quantidade_por_prato)
+            FROM vendas_diarias v
+            JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+            WHERE ft.insumo_id = p.insumo_id
+              AND v.data >= p.inicio AND v.data < p.fim
+        ), 0) AS consumo
+    FROM periodos p
+    JOIN insumos i ON i.id = p.insumo_id
+    WHERE p.fim IS NOT NULL
+    ORDER BY p.fim DESC, i.nome
+"""
+
+
+def _percentual(parte, total):
+    """Percentual de 'parte' sobre 'total', ou None quando não faz sentido."""
+    if not total:
+        return None
+    return round(parte / total * 100, 1)
+
+
+def reconciliacao_de_perdas(apenas_ultimo_periodo: bool = True) -> list[dict]:
+    """Fecha a conta de cada insumo entre duas contagens físicas.
+
+    Devolve, por período, quanto do disponível foi usado, quanto sobrou e
+    quanto se perdeu, em quantidade e em percentual. Um insumo só aparece
+    depois de ter duas contagens — antes disso não existe período fechado
+    para reconciliar.
+
+    Perda negativa significa que foi encontrado *mais* do que o esperado.
+    Isso não é lucro: costuma ser venda não lançada, compra não registrada
+    ou erro na contagem. Por isso o sinal é preservado em vez de zerado.
+    """
+    conn = get_connection()
+    linhas = conn.execute(SQL_RECONCILIACAO).fetchall()
+    conn.close()
+
+    resultado = []
+    for linha in linhas:
+        inicial = linha["estoque_inicial"]
+        compras = linha["compras"]
+        consumo = linha["consumo"]
+        final = linha["estoque_final"]
+
+        disponivel = inicial + compras
+        esperado = disponivel - consumo
+        perda = esperado - final
+
+        resultado.append({
+            "insumo": linha["insumo"],
+            "unidade_medida": linha["unidade_medida"],
+            "inicio": linha["inicio"],
+            "fim": linha["fim"],
+            "dias": _dias_entre(linha["inicio"], linha["fim"]),
+            "estoque_inicial": round(inicial, 2),
+            "compras": round(compras, 2),
+            "disponivel": round(disponivel, 2),
+            "consumo": round(consumo, 2),
+            "estoque_final_esperado": round(esperado, 2),
+            "estoque_final_contado": round(final, 2),
+            "perda": round(perda, 2),
+            "pct_usado": _percentual(consumo, disponivel),
+            "pct_sobra": _percentual(final, disponivel),
+            "pct_perda": _percentual(perda, disponivel),
+        })
+
+    if apenas_ultimo_periodo:
+        # Um insumo pode ter vários períodos fechados; aqui fica só o mais
+        # recente de cada um, que é o que interessa na tela principal.
+        vistos, ultimos = set(), []
+        for item in resultado:  # já vem ordenado do período mais recente
+            if item["insumo"] not in vistos:
+                vistos.add(item["insumo"])
+                ultimos.append(item)
+        return ultimos
+
+    return resultado
+
+
+def _dias_entre(inicio: str, fim: str) -> int:
+    d1 = datetime.date.fromisoformat(inicio)
+    d2 = datetime.date.fromisoformat(fim)
+    return (d2 - d1).days
+
+
+def resumo_de_perdas(apenas_ultimo_periodo: bool = True) -> dict:
+    """Números-chave da reconciliação, para o topo da tela de perdas."""
+    itens = reconciliacao_de_perdas(apenas_ultimo_periodo)
+    if not itens:
+        return {
+            "insumos_reconciliados": 0,
+            "com_perda": 0,
+            "com_sobra": 0,
+            "pior_insumo": None,
+            "pior_pct": None,
+            "pct_perda_medio": None,
+        }
+
+    com_perda = [i for i in itens if i["perda"] > 0]
+    piores = [i for i in com_perda if i["pct_perda"] is not None]
+    pior = max(piores, key=lambda i: i["pct_perda"]) if piores else None
+    percentuais = [i["pct_perda"] for i in itens if i["pct_perda"] is not None]
+
+    return {
+        "insumos_reconciliados": len(itens),
+        "com_perda": len(com_perda),
+        "com_sobra": sum(1 for i in itens if i["perda"] < 0),
+        "pior_insumo": pior["insumo"] if pior else None,
+        "pior_pct": pior["pct_perda"] if pior else None,
+        "pct_perda_medio": round(sum(percentuais) / len(percentuais), 1) if percentuais else None,
+    }
+
+
+def insumos_sem_reconciliacao() -> list[str]:
+    """Insumos que ainda não têm duas contagens, e por isso não reconciliam."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """SELECT i.nome, COUNT(c.id) AS contagens
+           FROM insumos i
+           LEFT JOIN contagens_fisicas c ON c.insumo_id = i.id
+           GROUP BY i.id, i.nome
+           HAVING COUNT(c.id) < 2
+           ORDER BY i.nome"""
+    ).fetchall()
+    conn.close()
+    return [linha["nome"] for linha in linhas]

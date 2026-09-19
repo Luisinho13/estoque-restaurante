@@ -29,6 +29,15 @@ st.set_page_config(
 COR = "#2E7D6F"
 COR_ALERTA = "#C1443F"
 
+# Acima disso a perda deixa de ser normal e vira alerta. Um restaurante bem
+# tocado perde de 1% a 4%; 5% já pede explicação.
+LIMITE_PERDA_ALTA = 5.0
+
+
+def _data_br(data_iso: str) -> str:
+    """'2026-08-18' vira '18/08/2026'."""
+    return datetime.date.fromisoformat(data_iso).strftime("%d/%m/%Y")
+
 
 # ---------- Login e cadastro ----------
 
@@ -1252,6 +1261,174 @@ def pagina_contagem():
             st.error(f"Erro: {e}")
 
 
+def _explicacao_da_conta():
+    with st.expander("Como esta conta é feita"):
+        st.markdown(
+            """
+            Entre duas contagens físicas dá para fechar a conta do que
+            aconteceu com cada insumo. Tudo que estava disponível teve um de
+            três destinos, e os três somam exatamente 100%:
+
+            ```
+            disponível  =  estoque da contagem anterior + compras do período
+            disponível  =  usado (vendas × ficha técnica)
+                         + sobra (contagem atual)
+                         + perda (o que falta para fechar)
+            ```
+
+            A **perda** é o que não se explica por venda nem por sobra:
+            quebra, desperdício, produto estragado, porção servida maior que
+            a da ficha técnica, furo. É exatamente o número que a contagem
+            mensal existe para revelar — sem ela, essa diferença fica
+            invisível.
+
+            Um insumo só aparece aqui depois de ter **duas** contagens. Antes
+            disso não existe período fechado para reconciliar.
+            """
+        )
+
+
+def _grafico_perdas(itens):
+    dados = [i for i in itens if i["pct_perda"] is not None][:12]
+    if not dados:
+        return
+    df = pd.DataFrame([
+        {"insumo": i["insumo"], "perda": i["pct_perda"], "quantidade": i["perda"],
+         "unidade": i["unidade_medida"]}
+        for i in dados
+    ])
+    grafico = (
+        alt.Chart(df)
+        .mark_bar(cornerRadiusEnd=4)
+        .encode(
+            x=alt.X("perda:Q", title="Perda no período (% do disponível)"),
+            y=alt.Y("insumo:N", sort="-x", title=None),
+            # Vermelho só a partir de 5%: abaixo disso a perda é normal e
+            # pintar tudo de alerta faria o alerta perder o sentido.
+            color=alt.condition(
+                alt.datum.perda >= LIMITE_PERDA_ALTA,
+                alt.value(COR_ALERTA),
+                alt.value(COR),
+            ),
+            tooltip=[
+                alt.Tooltip("insumo:N", title="Insumo"),
+                alt.Tooltip("perda:Q", title="Perda", format=".1f"),
+                alt.Tooltip("quantidade:Q", title="Quantidade perdida", format=".2f"),
+                alt.Tooltip("unidade:N", title="Unidade"),
+            ],
+        )
+        .properties(height=max(180, 34 * len(df)))
+    )
+    st.altair_chart(grafico, width="stretch")
+
+
+def pagina_perdas():
+    st.title("🧾 Perdas e Reconciliação")
+    st.caption(
+        "O que foi comprado, o que virou venda e o que se perdeu pelo caminho — "
+        "entre uma contagem física e a seguinte."
+    )
+
+    itens = crud.reconciliacao_de_perdas()
+    pendentes = crud.insumos_sem_reconciliacao()
+
+    if not itens:
+        st.info(
+            "Ainda não há nenhum período fechado para reconciliar.\n\n"
+            "Esta conta compara **duas** contagens físicas do mesmo insumo: "
+            "a primeira é o ponto de partida e a segunda revela o que se "
+            "perdeu no caminho. Com apenas uma contagem registrada, ainda não "
+            "há o que comparar."
+        )
+        if pendentes:
+            st.write(
+                f"**{len(pendentes)} insumo(s)** aguardando a próxima contagem: "
+                + ", ".join(pendentes[:12])
+                + ("…" if len(pendentes) > 12 else "")
+            )
+        st.caption(
+            "Registre a contagem do mês que vem em **Contagem Física** e esta "
+            "tela passa a funcionar sozinha."
+        )
+        _explicacao_da_conta()
+        return
+
+    resumo = crud.resumo_de_perdas()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Insumos reconciliados", resumo["insumos_reconciliados"])
+    col2.metric(
+        "Perda média",
+        f"{resumo['pct_perda_medio']}%" if resumo["pct_perda_medio"] is not None else "—",
+    )
+    col3.metric(
+        "Maior perda",
+        f"{resumo['pior_pct']}%" if resumo["pior_pct"] is not None else "—",
+        delta=resumo["pior_insumo"] or None,
+        delta_color="off",
+    )
+
+    criticos = [i for i in itens if (i["pct_perda"] or 0) >= LIMITE_PERDA_ALTA]
+    if criticos:
+        st.error(
+            f"⚠️ {len(criticos)} insumo(s) com perda de {LIMITE_PERDA_ALTA}% ou mais: "
+            + ", ".join(f"{i['insumo']} ({i['pct_perda']}%)" for i in criticos[:5])
+        )
+
+    sobras = [i for i in itens if i["perda"] < 0]
+    if sobras:
+        st.warning(
+            f"{len(sobras)} insumo(s) com **mais** estoque do que o esperado: "
+            + ", ".join(i["insumo"] for i in sobras[:5])
+            + ". Isso não é sobra boa — costuma ser venda não lançada, compra "
+            "não registrada ou erro de contagem."
+        )
+
+    st.subheader("Perda por insumo")
+    _grafico_perdas(sorted(itens, key=lambda i: -(i["pct_perda"] or 0)))
+
+    st.subheader("A conta de cada insumo")
+    st.caption("As três colunas de percentual somam 100% do que estava disponível.")
+    df = pd.DataFrame([
+        {
+            "Insumo": i["insumo"],
+            "Un.": i["unidade_medida"],
+            "Disponível": i["disponivel"],
+            "Usado": i["consumo"],
+            "% usado": i["pct_usado"],
+            "Sobrou": i["estoque_final_contado"],
+            "% sobra": i["pct_sobra"],
+            "Perdido": i["perda"],
+            "% perda": i["pct_perda"],
+            "Período": f"{_data_br(i['inicio'])} → {_data_br(i['fim'])} ({i['dias']}d)",
+        }
+        for i in sorted(itens, key=lambda i: -(i["pct_perda"] or 0))
+    ])
+    st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "% usado": st.column_config.NumberColumn(format="%.1f%%"),
+            "% sobra": st.column_config.NumberColumn(format="%.1f%%"),
+            "% perda": st.column_config.NumberColumn(format="%.1f%%"),
+            "Disponível": st.column_config.NumberColumn(format="%.2f"),
+            "Usado": st.column_config.NumberColumn(format="%.2f"),
+            "Sobrou": st.column_config.NumberColumn(format="%.2f"),
+            "Perdido": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+
+    if pendentes:
+        with st.expander(f"{len(pendentes)} insumo(s) ainda sem período fechado"):
+            st.caption(
+                "Estes têm menos de duas contagens físicas. Eles entram nesta "
+                "tela assim que a próxima contagem for registrada."
+            )
+            st.write(", ".join(pendentes))
+
+    _explicacao_da_conta()
+
+
 # ---------- Navegação ----------
 
 PG_DASHBOARD = st.Page(
@@ -1281,6 +1458,10 @@ PG_VENDA = st.Page(
 )
 PG_ZIG = st.Page(
     pagina_zig, title="Importar Vendas (PDV)", icon=":material/receipt:", url_path="vendas-pdv"
+)
+PG_PERDAS = st.Page(
+    pagina_perdas, title="Perdas e Reconciliação", icon=":material/scale:",
+    url_path="perdas",
 )
 PG_CONTAGEM = st.Page(
     pagina_contagem, title="Contagem Física", icon=":material/fact_check:", url_path="contagem"
@@ -1312,6 +1493,7 @@ PAGINAS_POR_AREA = {
     "zig": PG_ZIG,
     "venda": PG_VENDA,
     "contagem": PG_CONTAGEM,
+    "perdas": PG_PERDAS,
 }
 
 
@@ -1320,8 +1502,8 @@ def _liberadas(*areas):
 
 
 menu = {}
-if _liberadas("dashboard", "painel"):
-    menu["Visão geral"] = _liberadas("dashboard", "painel")
+if _liberadas("dashboard", "painel", "perdas"):
+    menu["Visão geral"] = _liberadas("dashboard", "painel", "perdas")
 if _liberadas("insumos", "pratos", "ficha"):
     menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha")
 if _liberadas("compra", "nfe", "zig", "venda", "contagem"):

@@ -25,6 +25,7 @@ ITERACOES = 200_000
 AREAS = {
     "dashboard": "Dashboard",
     "painel": "Painel de Estoque",
+    "perdas": "Perdas e Reconciliação",
     "insumos": "Insumos",
     "pratos": "Pratos",
     "ficha": "Ficha Técnica",

@@ -45,6 +45,31 @@ desperdício — a diferença entre o teórico e o real.
 > novo. Por isso a contagem precisa ser lançada com a data real em que
 > foi feita, nunca retroativa.
 
+## O que a contagem mensal revela
+
+O cálculo automático diz quanto *deveria* haver. A contagem física diz
+quanto há. A diferença entre os dois é a informação mais cara do
+estoque, e ela não aparece em nenhum dos dois números isolados.
+
+Entre duas contagens, tudo que estava disponível teve um de três
+destinos, e os três somam exatamente 100%:
+
+```
+disponível  =  estoque da contagem anterior + compras do período
+disponível  =  usado (vendas × ficha técnica)
+             + sobra (contagem atual)
+             + perda (o que falta para fechar)
+```
+
+A perda é o que não se explica por venda nem por sobra: quebra, produto
+estragado, porção servida maior que a da ficha técnica, furo. Um
+restaurante bem tocado perde de 1% a 4%; acima de 5% há o que investigar.
+
+Ver isso **por insumo e em percentual** muda a conversa. "Perdemos 12 kg
+de tomate" é um número solto. "11% do tomate que entrou foi para o lixo,
+contra 1,5% da batata" aponta direto para onde olhar — e quanto custa
+não olhar.
+
 ## O que o sistema faz
 
 **Entradas de estoque**
@@ -69,6 +94,9 @@ desperdício — a diferença entre o teórico e o real.
   acaba (estoque ÷ consumo médio diário), com semáforo de status. É a
   tela que responde o que precisa ser comprado antes de faltar
 - Registro da contagem física mensal, que vira a nova base do cálculo
+- **Perdas e Reconciliação**: entre duas contagens, quanto de cada insumo
+  virou venda, quanto sobrou e quanto se perdeu — em quantidade e em
+  percentual do que estava disponível
 
 ![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
 
@@ -84,10 +112,10 @@ aprovar. Isso mantém o controle de quem usa o sistema sem obrigar o
 administrador a criar conta para cada pessoa na mão.
 
 **Cada um enxerga só o que é dele.** Ao aprovar um cadastro, o
-administrador marca quais das dez áreas aquela pessoa vai acessar —
-Dashboard, Painel de Estoque, Insumos, Pratos, Ficha Técnica, Lançar
-Compra, Importar Nota Fiscal, Importar Vendas (PDV), Lançar Venda do Dia
-e Contagem Física. A sugestão inicial é só as duas primeiras: consulta,
+administrador marca quais das onze áreas aquela pessoa vai acessar —
+Dashboard, Painel de Estoque, Perdas e Reconciliação, Insumos, Pratos,
+Ficha Técnica, Lançar Compra, Importar Nota Fiscal, Importar Vendas
+(PDV), Lançar Venda do Dia e Contagem Física. A sugestão inicial é só as duas primeiras: consulta,
 sem mexer no estoque.
 
 O filtro não é cosmético. As páginas de áreas não liberadas nem chegam a
@@ -241,6 +269,27 @@ diferentes em cada banco. Era um defeito latente também no SQLite — o
 feed podia mudar de ordem sem motivo visível. Um terceiro critério na
 ordenação resolveu.
 
+### Na reconciliação de perdas
+
+**O dado de demonstração era fisicamente impossível.** Assim que a tela
+de perdas ficou pronta, ela acusou coisas como "usado 226%, sobra 100%,
+perda −226%". A conta estava certa — as identidades fechavam e um
+cálculo independente confirmava cada número. O problema era a entrada: o
+gerador do banco de demonstração escrevia a **mesma quantidade** nas duas
+contagens e só criava compras depois da segunda. Traduzindo: o tomate
+tinha 42,6 kg, vendia 99 kg e continuava com 42,6 kg. Nenhuma tela
+anterior reconciliava dois pontos no tempo, então a incoerência nunca
+tinha sido cobrada. O gerador passou a simular o fluxo de verdade —
+estoque inicial, compras que repõem o consumo, e uma perda plausível
+explicando o que falta.
+
+**Gerar a demonstração trancava a porta.** O script recria o banco do
+zero, o que apagava junto a tabela de usuários criada na v0.2. Quem
+rodasse o gerador ficava sem conseguir entrar no próprio app de
+demonstração — e o erro só apareceria na tela de login, sem explicar a
+causa. O script agora cria também um admin de demonstração e imprime a
+credencial ao terminar.
+
 ### O fio que liga todos
 
 Quase nenhum desses problemas deu mensagem de erro. O estoque errado, o
@@ -272,6 +321,10 @@ contagens:
 python seed_demo.py
 ESTOQUE_DB=estoque_demo.db streamlit run app.py
 ```
+
+Entre com **usuário `demo`, senha `demo1234`** — o gerador cria esse admin
+junto com os dados. O banco vem com duas contagens físicas já registradas,
+então a tela de Perdas e Reconciliação aparece preenchida.
 
 A variável `ESTOQUE_DB` aponta o app para outro arquivo de banco. Sem
 ela, o app usa o `estoque.db` padrão.
@@ -336,6 +389,21 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
 
+### v0.5 — Perdas e reconciliação
+
+- Tela **Perdas e Reconciliação**: entre duas contagens físicas, quanto de
+  cada insumo foi usado, quanto sobrou e quanto se perdeu, em quantidade e
+  em percentual do disponível. As três fatias somam 100%
+- Destaque para os insumos acima de 5% de perda, e aviso separado para o
+  caso inverso — encontrar **mais** do que o esperado, que costuma ser
+  venda não lançada ou erro de contagem, não sorte
+- A tela orienta quando ainda não há o que reconciliar: com uma contagem
+  só não existe período fechado, e ela diz exatamente o que falta
+- Nova área de permissão, liberável por usuário como as demais
+- `seed_demo.py` passa a simular um fluxo de estoque coerente, com perda
+  plausível por insumo, e a criar um admin de demonstração (`demo` /
+  `demo1234`) — antes o gerador apagava os usuários e trancava o app
+
 ### v0.4 — Banco na nuvem
 
 - `database.py` escolhe o banco sozinho: **PostgreSQL** quando há uma URL
@@ -399,7 +467,6 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 ## Próximos passos
 
 - Publicar o app no Streamlit Community Cloud (o banco já está na nuvem)
-- Histórico de perdas por reconciliação (diferença entre o teórico e a
-  contagem física)
+- Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
 - Sugestão de compra a partir dos dias de estoque restantes
