@@ -250,11 +250,68 @@ def calcular_estoque_teorico(insumo_nome: str) -> dict:
     }
 
 
+# A mesma conta de calcular_estoque_teorico, porém para todos os insumos de
+# uma vez. A versão antiga chamava aquela função em laço, o que dava 4
+# consultas por insumo — irrelevante num arquivo SQLite local, mas fatal
+# num banco remoto: com 27 insumos eram 109 idas ao servidor, cerca de 27
+# segundos só para montar o Dashboard. Aqui é uma consulta só.
+#
+# A lógica é a de sempre e não mudou: baseline = última contagem física,
+# mais compras e menos consumo a partir dela, sempre com >= (vendas do
+# próprio dia da contagem precisam ser descontadas).
+SQL_ESTOQUE_DE_TODOS = """
+    WITH ultima AS (
+        SELECT insumo_id, MAX(data) AS data_baseline
+        FROM contagens_fisicas
+        GROUP BY insumo_id
+    )
+    SELECT
+        i.nome,
+        i.unidade_medida,
+        i.estoque_minimo,
+        u.data_baseline,
+        COALESCE((
+            SELECT c.quantidade_contada
+            FROM contagens_fisicas c
+            WHERE c.insumo_id = i.id AND c.data = u.data_baseline
+            ORDER BY c.id DESC
+            LIMIT 1
+        ), 0) AS baseline,
+        COALESCE((
+            SELECT SUM(co.quantidade)
+            FROM compras co
+            WHERE co.insumo_id = i.id
+              AND co.data >= COALESCE(u.data_baseline, '0000-00-00')
+        ), 0) AS total_compras,
+        COALESCE((
+            SELECT SUM(v.quantidade * ft.quantidade_por_prato)
+            FROM vendas_diarias v
+            JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+            WHERE ft.insumo_id = i.id
+              AND v.data >= COALESCE(u.data_baseline, '0000-00-00')
+        ), 0) AS total_consumo
+    FROM insumos i
+    LEFT JOIN ultima u ON u.insumo_id = i.id
+"""
+
+
 def calcular_estoque_todos_insumos() -> list[dict]:
     conn = get_connection()
-    nomes = [row["nome"] for row in conn.execute("SELECT nome FROM insumos").fetchall()]
+    linhas = conn.execute(SQL_ESTOQUE_DE_TODOS).fetchall()
     conn.close()
-    return [calcular_estoque_teorico(nome) for nome in nomes]
+
+    resultado = []
+    for linha in linhas:
+        estoque_atual = linha["baseline"] + linha["total_compras"] - linha["total_consumo"]
+        resultado.append({
+            "insumo": linha["nome"],
+            "unidade_medida": linha["unidade_medida"],
+            "estoque_minimo": linha["estoque_minimo"],
+            "estoque_atual": round(estoque_atual, 1),
+            "abaixo_do_minimo": estoque_atual < linha["estoque_minimo"],
+            "baseline_usada": linha["data_baseline"] or SEM_CONTAGEM,
+        })
+    return resultado
 
 
 # ---------- Mapeamento de produtos de nota fiscal (NF-e) ----------
@@ -538,7 +595,10 @@ def movimentacoes_recentes(limite: int = 15) -> list[dict]:
         SELECT cf.data, 'Contagem', i.nome, cf.quantidade_contada, i.unidade_medida,
                COALESCE(cf.observacao, '')
         FROM contagens_fisicas cf JOIN insumos i ON i.id = cf.insumo_id
-        ORDER BY data DESC, tipo
+        -- 'item' desempata: sem ele, lançamentos com a mesma data e o mesmo
+        -- tipo saem em ordem arbitrária, e o LIMIT corta linhas diferentes
+        -- em cada banco. O feed ficava instável sem nenhum motivo visível.
+        ORDER BY data DESC, tipo, item
         LIMIT ?
         """,
         (limite,),
