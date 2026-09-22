@@ -87,7 +87,12 @@ não olhar.
 ## O que o sistema faz
 
 **Entradas de estoque**
-- Lançamento manual de compras
+- Lançamento manual de compras, um insumo por vez
+- **Nota fiscal digitada à mão**: para a nota que chega em papel ou em PDF,
+  sem XML. Fornecedor, número, data e a lista de itens numa tabela só —
+  todos lançados de uma vez, ou nenhum, se algum item estiver errado. O
+  número da nota serve de trava: se ela já foi lançada, o sistema avisa
+  antes de somar tudo de novo no estoque
 - Importação por **XML de NF-e**: cada produto do fornecedor é mapeado
   uma vez para um insumo, com fator de conversão quando a unidade da
   nota não bate com a unidade controlada (caixa → unidade, por exemplo).
@@ -107,16 +112,38 @@ não olhar.
   as linhas item a item são somadas por produto e por dia, e cada SKU é
   ligado uma vez a um prato — ou marcado como "não controlar", no caso de
   couvert, bebida e itens de loja
-- Lançamento manual por prato, com confirmação antes de somar um segundo
-  lançamento do mesmo prato no mesmo dia
+- Lançamento do **dia inteiro numa tabela só**: todos os pratos de uma vez,
+  com filtro por nome, já preenchida com o que está gravado naquela data.
+  Em branco não mexe no prato; zero apaga o lançamento dele no dia. É a
+  tela do dia a dia — prato a prato seriam dezenas de envios por noite, e
+  o que não cabe na rotina acaba não sendo lançado
+- Lançamento avulso por prato, para corrigir ou completar um só. O padrão é **substituir** o total do dia, não somar: relançar
+  o mesmo prato corrige o dia em vez de duplicá-lo, e clicar duas vezes no
+  botão dá o mesmo resultado que clicar uma. A tela mostra o que o prato
+  tira do estoque pela ficha técnica, e avisa quando o prato não tem ficha
+  — caso em que a venda não desconta nada
 
 **Conferência**
+- **Saída de Estoque no Período**: as vendas lançadas dia a dia somadas
+  num intervalo, para responder a pergunta da segunda-feira — quanto saiu
+  do estoque na semana. Quanto de cada insumo saiu, quais pratos geraram
+  essa saída, quanto cada dia pesou, e quais dias do período **não têm
+  venda lançada**, que é a falha que o lançamento manual produz sem dar
+  erro nenhum
 - **Dashboard** com indicadores do período, consumo por insumo, curva de
   vendas por dia, ranking de pratos e movimentações recentes
 - **"O que acaba primeiro"**: estimativa de em quantos dias cada insumo
   acaba (estoque ÷ consumo médio diário), com semáforo de status. É a
   tela que responde o que precisa ser comprado antes de faltar
-- Registro da contagem física mensal, que vira a nova base do cálculo
+- **Contagem física mensal numa tabela só**, com o estoque teórico ao lado
+  de cada insumo e filtro por nome. Ao gravar, a tela mostra na hora quais
+  insumos divergiram do calculado e em quanto — a informação que a contagem
+  existe para produzir, sem esperar um mês pela tela de perdas. Regravar
+  corrige o dia em vez de empilhar contagens
+- **Estoque mínimo em lote**, na tela de Insumos: é o mínimo que liga o
+  semáforo do painel e o alerta de reposição. Definido um a um, em mais de
+  cem insumos, não é definido nunca — e sem ele o sistema só conta o
+  passado, em vez de avisar antes de faltar
 - **Perdas e Reconciliação**: entre duas contagens, quanto de cada insumo
   virou venda, quanto sobrou e quanto se perdeu — em quantidade e em
   percentual do que estava disponível
@@ -137,11 +164,12 @@ aprovar. Isso mantém o controle de quem usa o sistema sem obrigar o
 administrador a criar conta para cada pessoa na mão.
 
 **Cada um enxerga só o que é dele.** Ao aprovar um cadastro, o
-administrador marca quais das onze áreas aquela pessoa vai acessar —
-Dashboard, Painel de Estoque, Perdas e Reconciliação, Insumos, Pratos,
-Ficha Técnica, Lançar Compra, Importar Nota Fiscal, Importar Vendas
-(PDV), Lançar Venda do Dia e Contagem Física. A sugestão inicial é só as duas primeiras: consulta,
-sem mexer no estoque.
+administrador marca quais das quatorze áreas aquela pessoa vai acessar —
+Dashboard, Painel de Estoque, Saída de Estoque no Período, Perdas e
+Reconciliação, Insumos, Pratos, Ficha Técnica, Importar Ficha Técnica,
+Lançar Compra, Lançar Nota Fiscal (manual), Importar Nota Fiscal,
+Importar Vendas (PDV), Lançar Venda do Dia e Contagem Física. A sugestão
+inicial é só as três de consulta, que não mexem no estoque.
 
 O filtro não é cosmético. As páginas de áreas não liberadas nem chegam a
 ser registradas na navegação, então não adianta digitar a URL — a rota
@@ -200,6 +228,35 @@ que já tenha dados, para não misturar duas cargas.
 
 Esta é a parte que normalmente não aparece num README, e é a que mais
 ensinou. Cada item traz o sintoma, a causa real e o que resolveu.
+
+**Quase nenhum deles deu mensagem de erro.** Essa é a única coisa que
+todos têm em comum, e é o resumo honesto do projeto: num sistema que
+existe para dizer quanto sobrou, o defeito perigoso não é o que derruba a
+tela — é o que devolve um número errado com cara de certo. O índice
+abaixo é a lista completa do que foi encontrado até aqui.
+
+| # | Sintoma | Causa real |
+|---|---------|------------|
+| 1 | Estoque errado depois da contagem | Comparação de data com `>` em vez de `>=`: a venda do próprio dia da contagem não era descontada |
+| 2 | Uma venda descontava o triplo | Linhas repetidas em `vendas_diarias`, vindas de envios repetidos do formulário |
+| 3 | Produto do fornecedor virava o insumo errado | Código de produto tratado como único entre fornecedores diferentes |
+| 4 | Produtos do PDV sumiam na importação | SKU comparado sem diferenciar maiúsculas: `Fe` e `FE` são produtos diferentes na Zig |
+| 5 | Venda de madrugada caía no dia errado | A planilha da Zig tem duas datas; a que vale é a do *evento*, o dia operacional |
+| 6 | Banco hospedado não instalava | Cliente Python exigia compilar com a toolchain do Rust; a escolha mudou para PostgreSQL |
+| 7 | Consulta quebrava com texto contendo `%` | O tradutor de dialeto trocava `?` por `%s` sem escapar o `%` |
+| 8 | Uma tela levava 27 segundos para abrir | Quatro consultas por insumo, 109 no total: irrelevante em arquivo local, fatal contra banco remoto |
+| 9 | Os dois bancos discordavam entre si | Ordenação sem critério de desempate fazia o `LIMIT` cortar linhas diferentes em cada banco |
+| 10 | Tela de perdas acusava "usado 226%" | O dado de demonstração era fisicamente impossível; o gerador não fechava a conta |
+| 11 | **Lançamento sumia sem dar erro** | O app podia trocar de banco no meio da sessão, calado, e gravar num SQLite efêmero em vez do Postgres |
+| 12 | **Lançamento manual duplicava o dia** | Somar era o padrão; um clique a mais criava uma segunda linha de venda |
+| 13 | **O servidor achava que já era amanhã** | Streamlit Cloud roda em UTC; às 23h de Brasília a noite inteira caía no dia seguinte |
+| 14 | **Script de demonstração escreveu em produção** | `ESTOQUE_DB` só escolhe o *arquivo* do SQLite, não impede a escolha do Postgres |
+| 15 | **A camada de alerta estava morta** | 127 de 128 insumos com estoque mínimo zero: o semáforo nunca saía do verde |
+| 16 | **Lançar o dia levaria dezenas de envios** | Formulário de um item por vez, com 87 pratos e 128 insumos |
+
+Os dez primeiros foram resolvidos durante a construção; os de 11 a 16
+apareceram na preparação para o sistema entrar em uso de verdade, e estão
+contados em detalhe abaixo.
 
 ### No cálculo do estoque
 
@@ -310,6 +367,55 @@ tornou visível.** Reescrito para uma consulta só, o Dashboard caiu para
 2,1s e o Painel para 0,9s. A conta é a mesma; foi conferida insumo a
 insumo, nos cinco campos de cada um, contra a versão antiga.
 
+**Um lançamento sumiu sem dar erro.** Uma venda lançada no app não
+aparecia em tela nenhuma depois. Não havia mensagem de erro, a tela dizia
+"Venda registrada!", e o banco simplesmente não tinha a linha. A causa
+estava na escolha do banco: a cada consulta, o `database.py` refazia a
+pergunta "existe credencial de Postgres?", e a resposta vinha de uma
+leitura dos secrets do Streamlit dentro de um `try/except` genérico.
+Qualquer tropeço momentâneo nessa leitura devolvia `None`, e o app caía
+**calado** no SQLite — gravando num arquivo local e efêmero do Streamlit
+Cloud, enquanto a tela seguinte lia do Postgres de novo. O dado ia para o
+lugar errado sem ninguém ser avisado. Agora o banco é escolhido uma vez
+por processo e essa escolha é congelada: se a credencial sumir depois, o
+app quebra na cara em vez de escrever no lugar errado. E a tela **Minha
+conta** passou a dizer, por escrito, em qual banco os lançamentos estão
+caindo — a pergunta que custou essa investigação inteira.
+
+**O lançamento manual duplicava o dia.** Um clique a mais no botão
+"Registrar" criava uma segunda linha de venda para o mesmo prato no mesmo
+dia, e o consumo saía dobrado. A proteção anterior era uma pergunta
+("já existem 4 unidades, confirma somar mais?"), que resolvia o clique
+duplo mas atrapalhava o uso normal: quem quisesse só corrigir o número do
+dia tinha que apagar antes. A troca foi mudar o padrão. Lançar passou a
+**substituir** o total do dia em vez de somar, como a importação da Zig já
+fazia: o número digitado é o total, relançar corrige, e clicar duas vezes
+dá o mesmo resultado que clicar uma. Somar continua existindo, mas como
+escolha explícita.
+
+**Um script de demonstração escreveu no banco de produção.** O
+`seed_demo.py` gera um banco fictício e, para isso, apaga e recria tudo.
+Ele se protegia definindo `ESTOQUE_DB`, apontando para o arquivo de
+demonstração — só que essa variável escolhe apenas *qual arquivo SQLite*
+usar, e não se o banco é SQLite. Numa máquina com a credencial do
+Postgres configurada, o `database.py` escolhia o Postgres e ignorava o
+caminho inteiro. O script chegou a inserir insumos fictícios no banco do
+restaurante antes de parar sozinho, por esbarrar num nome repetido. A
+proteção parecia existir e não existia — foi o nome repetido que segurou,
+não o desenho. Agora o script liga o modo demonstração antes de importar
+o `database.py` e, como segunda tranca, confere qual banco foi escolhido
+antes de apagar o que quer que seja.
+
+**O servidor achava que já era amanhã.** O Streamlit Cloud roda em UTC e
+o restaurante fecha de madrugada. Às 23h de Brasília, o `date.today()` do
+servidor já tinha virado o dia seguinte — quem lançasse o movimento no fim
+do expediente veria a data de amanhã preenchida no formulário, e a noite
+inteira cairia no dia errado. Errado por um dia é o pior tipo de erro
+aqui: não chama atenção, passa na conferência, e só aparece quando a
+contagem do mês não fecha. A data do sistema passou a ser sempre a de
+Brasília, num único lugar (`crud.hoje()`), e a base de fusos entrou no
+`requirements.txt` para o container não cair num palpite.
+
 **Os dois bancos discordavam entre si.** Ao comparar o SQLite e o
 Postgres lado a lado, tudo batia menos o feed de movimentações recentes.
 A ordenação era por data e tipo, sem desempate. Como todas as vendas de
@@ -341,15 +447,32 @@ credencial ao terminar.
 
 ### O fio que liga todos
 
-Quase nenhum desses problemas deu mensagem de erro. O estoque errado, o
-desconto triplicado, o produto trocado, o feed instável: em todos, o
-sistema seguiu rodando e entregando um resultado — só que o resultado
-errado. Num sistema que existe para dizer quanto sobrou, um número errado
-com cara de certo é pior do que uma tela de erro.
+Nenhum desses problemas deu mensagem de erro. O estoque errado, o
+desconto triplicado, o produto trocado, o feed instável, o lançamento que
+sumiu, a noite que caiu no dia seguinte: em todos, o sistema seguiu
+rodando e entregando um resultado — só que o resultado errado. Num
+sistema que existe para dizer quanto sobrou, um número errado com cara de
+certo é pior do que uma tela de erro.
 
 Por isso a conferência virou rotina: comparar a versão nova com a antiga
 linha a linha, comparar os dois bancos campo a campo, e desconfiar
 especialmente do que funciona sem reclamar.
+
+Três padrões saíram disso e hoje valem como regra no projeto:
+
+- **Proteção que não foi testada não é proteção.** O `seed_demo.py`
+  parecia protegido por uma variável de ambiente que não protegia nada; o
+  que segurou o estrago foi um nome repetido no banco, por acaso. Toda
+  tranca nova aqui ganha uma segunda, que confere o que de fato aconteceu
+  em vez do que deveria ter acontecido.
+- **Gravar duas vezes tem que dar no mesmo que gravar uma.** Quase todo
+  lançamento em dobro deste projeto nasceu de somar onde deveria
+  substituir. Hoje venda, contagem e importação substituem por padrão, e
+  somar é escolha explícita.
+- **O que a tela mostra depois de gravar vem lido de volta do banco**, e
+  não repetido do formulário. Foi assim que o lançamento sumido teria
+  aparecido no mesmo instante, em vez de na conferência da semana
+  seguinte.
 
 ## Como rodar
 
@@ -482,6 +605,57 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
 
+### v0.9 — A operação em lote
+
+Preparação para o sistema entrar em uso de verdade. O tema é o mesmo em
+tudo: **o que não cabe na rotina não é feito**, e um cadastro que não é
+feito vira um número errado com cara de certo.
+
+- **Corrigido: o servidor achava que já era amanhã.** O Streamlit Cloud
+  roda em UTC; às 23h de Brasília o lançamento da noite cairia no dia
+  seguinte. A data do sistema passou a ser a de Brasília, num lugar só
+- **Venda do dia inteiro numa tabela**: todos os pratos de uma vez, com
+  filtro, pré-preenchida com o que já está gravado. Em branco não mexe,
+  zero apaga. Lançar prato a prato eram dezenas de envios por noite
+- **Contagem física numa tabela**, com o estoque teórico ao lado de cada
+  insumo, e o relatório de divergências mostrado no mesmo instante em que
+  a contagem é gravada
+- **Estoque mínimo em lote** na tela de Insumos, com o consumo médio
+  diário ao lado para calibrar o número
+- Tudo em lote é **tudo ou nada** e **idempotente**: item errado não deixa
+  meio lançamento entrar, e gravar duas vezes dá o mesmo resultado que
+  gravar uma
+- **Corrigido: o gerador do banco de demonstração escrevia no banco real.**
+  Ele definia `ESTOQUE_DB`, que só escolhe o *arquivo* do SQLite — com
+  credencial de Postgres no ambiente, o app escolhia o Postgres e ignorava
+  o caminho. Agora ele liga o modo demonstração antes de tudo e confere o
+  banco escolhido antes de apagar qualquer coisa
+
+### v0.8 — Lançamento diário confiável
+
+- **Corrigido: lançamento que sumia sem dar erro.** O app podia trocar de
+  banco no meio da sessão, calado, e gravar num SQLite efêmero em vez do
+  Postgres. A escolha do banco passou a ser feita uma vez e congelada; se
+  a credencial sumir, o app falha em vez de escrever no lugar errado
+- **Lançar Venda do Dia** refeita: o padrão é substituir o total do dia,
+  não somar — relançar corrige em vez de duplicar, e clique duplo no botão
+  não conta duas vezes. O total exibido depois de gravar é **lido de volta
+  do banco**, não repetido do formulário. A tela mostra o que a venda tira
+  do estoque pela ficha técnica, lista tudo que já está lançado no dia e
+  avisa quando o prato não tem ficha (venda que não desconta nada).
+  Quantidade zero deixou de ser aceita
+- **Lançar Nota Fiscal (manual)**: nota digitada em tabela, vários itens de
+  uma vez, para quando não há XML. É tudo ou nada — item errado não deixa
+  meia nota entrar no estoque — e o número da nota avisa se ela já foi
+  lançada antes
+- **Saída de Estoque no Período**: as vendas do dia a dia somadas por
+  semana (ou por qualquer intervalo), com quanto saiu de cada insumo,
+  quais pratos geraram a saída, o peso de cada dia e a lista dos **dias
+  sem venda lançada** — a falha silenciosa do lançamento manual. Exporta
+  em CSV
+- **Minha conta** passou a mostrar ao administrador em qual banco os dados
+  estão sendo gravados
+
 ### v0.7 — Ficha técnica por planilha
 
 - Tela **Importar Ficha Técnica**: as duas planilhas da cozinha (pratos
@@ -600,6 +774,8 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Próximos passos
 
+- Lembrete de dia sem venda lançada, para o buraco aparecer no mesmo dia
+  em vez de só na conferência da semana
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
 - Sugestão de compra a partir dos dias de estoque restantes
