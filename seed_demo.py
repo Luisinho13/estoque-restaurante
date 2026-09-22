@@ -17,6 +17,7 @@ entrar no app.
 import datetime
 import os
 import random
+import pathlib
 from pathlib import Path
 
 CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
@@ -27,6 +28,18 @@ CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
 USUARIO_DEMO = "demo"
 SENHA_DEMO = "demo1234"
 os.environ["ESTOQUE_DB"] = str(CAMINHO_DEMO)
+
+# ESTOQUE_DB sozinho NÃO basta: ele só escolhe o *arquivo* do SQLite. Se
+# houver credencial de Postgres no ambiente ou nos secrets — e na máquina
+# de quem desenvolve o app real, há —, o database.py escolhe o Postgres e
+# ignora o caminho acima. Este script já chegou a inserir insumos
+# fictícios no banco do restaurante por causa disso.
+#
+# MODO_DEMO é o cinto de segurança que existe justamente para isso: com
+# ele ligado, url_do_postgres() devolve None aconteça o que acontecer.
+# Precisa vir antes do import do database, porque a escolha do banco é
+# congelada na primeira vez que é feita.
+os.environ["MODO_DEMO"] = "1"
 
 import auth  # noqa: E402
 import crud  # noqa: E402  (precisa enxergar o ESTOQUE_DB definido acima)
@@ -215,6 +228,23 @@ def gerar_compras(insumo, unidade, alvo, inicio=None, duracao=30):
 def main():
     if CAMINHO_DEMO.name != "estoque_demo.db":
         raise SystemExit("Este script só recria o banco de demonstração.")
+
+    # Segunda tranca, conferindo o que o database.py realmente decidiu.
+    # A primeira (MODO_DEMO, lá em cima) deve bastar; esta existe porque o
+    # estrago aqui é apagar e reescrever um banco, e o preço de conferir é
+    # nenhum.
+    if database.backend() != "sqlite":
+        raise SystemExit(
+            f"Abortado: o banco configurado é '{database.backend()}', não SQLite. "
+            "Este script apaga e recria o banco de demonstração e nunca deve "
+            "tocar no banco real."
+        )
+    if pathlib.Path(database.DB_PATH).resolve() != CAMINHO_DEMO.resolve():
+        raise SystemExit(
+            f"Abortado: o SQLite apontado é '{database.DB_PATH}', e não o "
+            f"banco de demonstração '{CAMINHO_DEMO}'."
+        )
+
     CAMINHO_DEMO.unlink(missing_ok=True)
     database.criar_tabelas()
 
