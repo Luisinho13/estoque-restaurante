@@ -64,22 +64,14 @@ DB_PATH = Path(
 )
 
 
-def url_do_postgres():
-    """URL de conexão do Postgres, ou None para usar o SQLite local.
+def _procurar_url_postgres():
+    """Procura a credencial do Postgres, sem decidir nada.
 
-    Procura primeiro na variável de ambiente e depois nos secrets do
+    Olha primeiro a variável de ambiente e depois os secrets do
     Streamlit, que é como a nuvem entrega a credencial. O import do
     Streamlit é protegido porque este módulo também roda em scripts
     soltos (seed_demo.py, migrar_para_nuvem.py), fora do app.
-
-    Em modo demonstração devolve None de saída, aconteça o que acontecer.
-    É o cinto de segurança da vitrine: mesmo que alguém cole a credencial
-    do banco real nos secrets do app de demonstração, ele não chega nos
-    dados do restaurante — cai no SQLite fictício.
     """
-    if modo_demo():
-        return None
-
     url = os.environ.get("DATABASE_URL")
     if url:
         return url
@@ -91,9 +83,65 @@ def url_do_postgres():
         return None
 
 
+# O banco é escolhido UMA vez por processo e essa escolha não muda mais.
+#
+# Antes, cada get_connection() reabria a pergunta "tem credencial de
+# Postgres?" — e a resposta vinha de um st.secrets dentro de um
+# try/except genérico. Qualquer tropeço momentâneo na leitura dos secrets
+# (rerun fora do contexto do Streamlit, recarga do arquivo) devolvia None
+# e o app caía calado no SQLite: o lançamento ia para um arquivo local e
+# efêmero do Streamlit Cloud, e a tela seguinte, lendo do Postgres de
+# novo, mostrava o estoque sem ele. O dado não dava erro, simplesmente
+# não existia.
+#
+# Agora a resposta é congelada na primeira vez e, se a credencial sumir
+# depois, o app quebra na cara em vez de escrever no banco errado.
+_url_postgres = None          # None = ainda não perguntou
+_sem_postgres = False         # True = já perguntou e é SQLite mesmo
+
+
+def url_do_postgres():
+    """URL de conexão do Postgres, ou None para usar o SQLite local.
+
+    Em modo demonstração devolve None de saída, aconteça o que acontecer.
+    É o cinto de segurança da vitrine: mesmo que alguém cole a credencial
+    do banco real nos secrets do app de demonstração, ele não chega nos
+    dados do restaurante — cai no SQLite fictício.
+    """
+    global _url_postgres, _sem_postgres
+
+    if modo_demo():
+        return None
+
+    if _url_postgres:
+        return _url_postgres
+    if _sem_postgres:
+        return None
+
+    url = _procurar_url_postgres()
+    if url:
+        _url_postgres = url
+    else:
+        _sem_postgres = True
+    return url
+
+
 def backend():
     """'postgres' ou 'sqlite', conforme a configuração encontrada."""
     return "postgres" if url_do_postgres() else "sqlite"
+
+
+def descricao_do_backend() -> str:
+    """Frase curta dizendo onde os dados estão sendo gravados.
+
+    Existe para que a pergunta "em qual banco esse lançamento caiu?"
+    tenha resposta na própria tela, sem precisar abrir o servidor.
+    """
+    if modo_demo():
+        return "SQLite de demonstração (dados fictícios, apagados ao reiniciar)"
+    if backend() == "postgres":
+        return "PostgreSQL na nuvem"
+    return f"SQLite local · {DB_PATH}"
 
 
 # ---------- Tradução de dialeto ----------
@@ -294,7 +342,8 @@ ESQUEMA = """
             quantidade REAL NOT NULL,
             data TEXT NOT NULL,          -- formato YYYY-MM-DD
             fornecedor TEXT,
-            observacao TEXT
+            observacao TEXT,
+            numero_nota TEXT             -- nº da NF, quando a compra veio de uma nota
         );
 
         CREATE TABLE IF NOT EXISTS vendas_diarias (
@@ -351,14 +400,20 @@ ESQUEMA = """
         );
 """
 
-# Colunas acrescentadas depois que a tabela usuarios já existia em bancos
-# reais. O CREATE TABLE acima só vale para bancos novos.
-COLUNAS_NOVAS_DE_USUARIOS = {
-    "nome": "TEXT",
-    "papel": "TEXT NOT NULL DEFAULT 'usuario'",
-    "status": "TEXT NOT NULL DEFAULT 'pendente'",
-    "decidido_em": "TEXT",
-    "decidido_por": "TEXT",
+# Colunas acrescentadas depois que a tabela já existia em bancos reais.
+# O CREATE TABLE acima só vale para bancos novos, então cada coluna nova
+# precisa entrar aqui também para alcançar quem já estava rodando.
+COLUNAS_NOVAS = {
+    "usuarios": {
+        "nome": "TEXT",
+        "papel": "TEXT NOT NULL DEFAULT 'usuario'",
+        "status": "TEXT NOT NULL DEFAULT 'pendente'",
+        "decidido_em": "TEXT",
+        "decidido_por": "TEXT",
+    },
+    "compras": {
+        "numero_nota": "TEXT",
+    },
 }
 
 
@@ -367,16 +422,20 @@ def criar_tabelas():
 
     if backend() == "postgres":
         conn.executescript(ESQUEMA)
-        for coluna, tipo in COLUNAS_NOVAS_DE_USUARIOS.items():
-            conn.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {coluna} {tipo}")
+        for tabela, colunas in COLUNAS_NOVAS.items():
+            for coluna, tipo in colunas.items():
+                conn.execute(
+                    f"ALTER TABLE {tabela} ADD COLUMN IF NOT EXISTS {coluna} {tipo}"
+                )
         onde = "PostgreSQL (nuvem)"
     else:
         cursor = conn.cursor()
         cursor.executescript(ESQUEMA)
-        existentes = {linha[1] for linha in cursor.execute("PRAGMA table_info(usuarios)")}
-        for coluna, tipo in COLUNAS_NOVAS_DE_USUARIOS.items():
-            if coluna not in existentes:
-                cursor.execute(f"ALTER TABLE usuarios ADD COLUMN {coluna} {tipo}")
+        for tabela, colunas in COLUNAS_NOVAS.items():
+            existentes = {linha[1] for linha in cursor.execute(f"PRAGMA table_info({tabela})")}
+            for coluna, tipo in colunas.items():
+                if coluna not in existentes:
+                    cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
         onde = str(DB_PATH)
 
     conn.commit()

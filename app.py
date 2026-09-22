@@ -205,6 +205,15 @@ def pagina_minha_conta():
             st.info("Nenhuma área liberada ainda. Peça ao administrador.")
         st.caption("Para pedir acesso a outra área, fale com o administrador.")
 
+    if E_ADMIN:
+        st.divider()
+        st.subheader("Onde os dados estão sendo gravados")
+        # Já aconteceu de um lançamento sumir porque o app caiu calado no
+        # SQLite em vez do Postgres. Agora a escolha do banco é congelada
+        # na partida do processo e fica escrita aqui, para a pergunta
+        # "em qual banco isso caiu?" ter resposta sem abrir o servidor.
+        st.info(database.descricao_do_backend(), icon=":material/database:")
+
     st.divider()
     st.subheader("Trocar minha senha")
     with st.form("trocar_senha"):
@@ -441,6 +450,102 @@ def unidades_dos_insumos():
     dados = conn.execute("SELECT nome, unidade_medida FROM insumos").fetchall()
     conn.close()
     return {d["nome"]: d["unidade_medida"] for d in dados}
+
+
+def _tabela_em_lote(linhas, coluna_item, coluna_valor, rotulo_valor, chave,
+                    formato, busca_rotulo, passo=0.5):
+    """Tabela editável com filtro, para preencher muitos itens de uma vez.
+
+    Devolve `{nome do item: valor}` só com o que foi realmente digitado.
+
+    Duas armadilhas resolvidas aqui, ambas do tipo que não dá erro:
+
+    **O filtro trocaria os valores de lugar.** O `st.data_editor` guarda as
+    edições por *índice de linha*, não por item. Filtrar muda quais linhas
+    ocupam cada índice, então um valor digitado antes do filtro seria
+    reaplicado em outro insumo depois dele — silenciosamente. Por isso os
+    valores são mantidos aqui, num dicionário por nome, e o widget ganha
+    uma chave que inclui o texto do filtro: ao filtrar, o editor recomeça
+    limpo e é remontado a partir do dicionário, que é a fonte da verdade.
+
+    **Branco e zero são coisas diferentes.** Célula vazia significa "não
+    mexer" e zero significa "é zero mesmo". Como NaN é *truthy* em Python,
+    o teste tem que ser `pd.isna()`, nunca `not valor`.
+
+    A chave deve incluir a data quando a tela tem uma, para que trocar de
+    dia não carregue os números do dia anterior.
+    """
+    chave_valores = f"{chave}_valores"
+    if chave_valores not in st.session_state:
+        st.session_state[chave_valores] = {
+            l[coluna_item]: float(l[coluna_valor])
+            for l in linhas
+            if l.get(coluna_valor) is not None and not pd.isna(l[coluna_valor])
+        }
+    valores = st.session_state[chave_valores]
+
+    busca = st.text_input(busca_rotulo, key=f"{chave}_busca",
+                          placeholder="digite para filtrar")
+    termo = busca.strip().lower()
+    visiveis = [l for l in linhas if termo in l[coluna_item].lower()] if termo else linhas
+
+    if not visiveis:
+        st.caption("Nenhum item com esse nome.")
+        return valores
+
+    # A contagem de preenchidos NÃO entra aqui: esta legenda é desenhada
+    # antes do editor, então mostraria o número anterior à edição desta
+    # interação — sempre um passo atrasado. Ela aparece depois da tabela,
+    # onde o número já está certo.
+    #
+    # O "None" cinza das células vazias é do próprio Streamlit, que usa
+    # essa palavra como marca de célula numérica em branco. Não dá para
+    # trocar pelo column_config, então resta dizer o que ela significa.
+    st.caption(
+        f"Mostrando {len(visiveis)} de {len(linhas)}. "
+        "Célula com None em cinza está vazia."
+    )
+
+    exibidas = [{**l, coluna_valor: valores.get(l[coluna_item])} for l in visiveis]
+    df = pd.DataFrame(exibidas)
+    # Coluna toda em None vira dtype 'object', e aí o editor escreve o texto
+    # "None" em cada célula em vez de deixá-la vazia. Convertida para número,
+    # None vira NaN e a célula aparece em branco, que é o que "não preenchido"
+    # deve parecer.
+    df[coluna_valor] = pd.to_numeric(df[coluna_valor], errors="coerce")
+    tabela = st.data_editor(
+        df,
+        width="stretch",
+        hide_index=True,
+        height=min(620, 60 + 35 * len(exibidas)),
+        # A chave muda com o filtro de propósito: ver o docstring.
+        key=f"{chave}_editor_{termo}",
+        disabled=[c for c in exibidas[0] if c != coluna_valor],
+        column_config={
+            coluna_valor: st.column_config.NumberColumn(
+                rotulo_valor, min_value=0, step=passo, format=formato
+            ),
+        },
+    )
+
+    # O que está visível volta para o dicionário; o que está filtrado fora
+    # permanece como estava.
+    for _, linha in tabela.iterrows():
+        nome = linha[coluna_item]
+        valor = linha[coluna_valor]
+        if pd.isna(valor):
+            valores.pop(nome, None)
+        else:
+            valores[nome] = float(valor)
+    return valores
+
+
+def _como_itens(valores, chave_item, chave_valor):
+    """O dicionário da tabela vira a lista que as funções de lote esperam."""
+    return [
+        {chave_item: nome, chave_valor: valor}
+        for nome, valor in sorted(valores.items())
+    ]
 
 
 # ---------- Dashboard ----------
@@ -758,7 +863,272 @@ def pagina_painel():
                 st.rerun()
 
 
+# ---------- Saída de Estoque por Período ----------
+
+# As vendas são lançadas dia a dia, à mão, porque a Zig não expõe API. Um
+# dia isolado não responde nada; a pergunta real é "quanto saiu do estoque
+# nesta semana", feita na segunda de manhã. Por isso o padrão da tela é a
+# semana corrente, contada a partir da segunda-feira.
+
+def _intervalo_do_periodo(rotulo: str, hoje: datetime.date):
+    segunda = crud.segunda_da_semana(hoje)
+    if rotulo == "Esta semana":
+        return segunda, hoje
+    if rotulo == "Semana passada":
+        return segunda - datetime.timedelta(days=7), segunda - datetime.timedelta(days=1)
+    if rotulo == "Últimos 7 dias":
+        return hoje - datetime.timedelta(days=6), hoje
+    return hoje - datetime.timedelta(days=29), hoje
+
+
+PERIODOS = ["Esta semana", "Semana passada", "Últimos 7 dias", "Últimos 30 dias"]
+
+
+def _escolher_periodo():
+    """Atalhos de período mais a opção de digitar as datas na mão."""
+    hoje = crud.hoje()
+    rotulo = st.segmented_control(
+        "Período", PERIODOS + ["Escolher datas"], default="Esta semana",
+        key="saida_periodo",
+    ) or "Esta semana"
+
+    if rotulo != "Escolher datas":
+        return _intervalo_do_periodo(rotulo, hoje)
+
+    escolhido = st.date_input(
+        "De / até",
+        value=(crud.segunda_da_semana(hoje), hoje),
+        max_value=hoje,
+        key="saida_datas",
+    )
+    # Enquanto a pessoa está escolhendo, o date_input de intervalo devolve
+    # só a primeira data. Aí ainda não há período para calcular.
+    if not isinstance(escolhido, (tuple, list)) or len(escolhido) != 2:
+        return None, None
+    return escolhido[0], escolhido[1]
+
+
+def _grafico_dia_a_dia(dados):
+    df = pd.DataFrame(dados)
+    df["data"] = pd.to_datetime(df["data"])
+    grafico = (
+        alt.Chart(df)
+        .mark_bar(color=COR, cornerRadiusEnd=3)
+        .encode(
+            x=alt.X("data:T", title=None),
+            y=alt.Y("pratos_vendidos:Q", title="Pratos vendidos"),
+            tooltip=[
+                alt.Tooltip("data:T", title="Data", format="%d/%m/%Y"),
+                alt.Tooltip("pratos_vendidos:Q", title="Pratos"),
+            ],
+        )
+        .properties(height=240)
+    )
+    st.altair_chart(grafico, width="stretch")
+
+
+def _aviso_de_buracos(buracos, dias):
+    """Dia sem lançamento não dá erro — some do consumo e infla o estoque."""
+    if not buracos:
+        st.success(
+            f"Todos os {dias} dia(s) do período têm venda lançada.",
+            icon=":material/task_alt:",
+        )
+        return
+    lista = ", ".join(_data_br(d) for d in buracos[:10])
+    resto = f" (+{len(buracos) - 10})" if len(buracos) > 10 else ""
+    st.warning(
+        f"**{len(buracos)} de {dias} dia(s) sem venda lançada**: {lista}{resto}. "
+        "Se o restaurante abriu nesses dias, o consumo abaixo está menor que o "
+        "real e o estoque teórico, maior.",
+        icon=":material/event_busy:",
+    )
+
+
+def pagina_saida():
+    st.title("📉 Saída de Estoque no Período")
+    st.caption(
+        "As vendas são lançadas dia a dia. Aqui elas são somadas para "
+        "responder a pergunta da segunda-feira: quanto saiu do estoque."
+    )
+
+    if not listar_insumos():
+        st.info("Nenhum insumo cadastrado ainda. Vá em 'Insumos'.")
+        return
+
+    inicio, fim = _escolher_periodo()
+    if inicio is None:
+        st.info("Escolha as duas datas do período.")
+        return
+    if inicio > fim:
+        st.error("A data inicial é depois da final.")
+        return
+
+    inicio_iso, fim_iso = str(inicio), str(fim)
+    st.caption(f"De {_data_br(inicio_iso)} até {_data_br(fim_iso)}")
+
+    resumo = crud.resumo_do_periodo(inicio_iso, fim_iso)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Pratos vendidos", int(resumo["pratos_vendidos"]), border=True)
+    col2.metric("Insumos movimentados", resumo["insumos_movimentados"], border=True)
+    col3.metric(
+        "Dias lançados",
+        f"{resumo['dias_lancados']}/{resumo['dias']}",
+        border=True,
+        help="Dias do período com pelo menos uma venda lançada.",
+    )
+    col4.metric("Compras no período", resumo["compras_lancadas"], border=True)
+
+    _aviso_de_buracos(resumo["dias_sem_lancamento"], resumo["dias"])
+
+    saidas = crud.saida_por_periodo(inicio_iso, fim_iso)
+    if not saidas:
+        st.info(
+            "Nenhuma venda lançada neste período — não há saída de estoque "
+            "para mostrar."
+        )
+        return
+
+    st.divider()
+    aba_insumos, aba_pratos, aba_dias = st.tabs(
+        ["Por insumo", "Por prato", "Dia a dia"]
+    )
+
+    with aba_insumos:
+        st.caption(
+            "Quanto de cada insumo saiu no período (vendas × ficha técnica), "
+            "e quanto ainda resta em estoque."
+        )
+        df = pd.DataFrame(saidas)
+        df["Status"] = df.apply(
+            lambda linha: "🟠 Abaixo do mínimo" if linha["abaixo_do_minimo"] else "🟢 Ok",
+            axis=1,
+        )
+        visivel = df[[
+            "insumo", "saida", "unidade_medida", "media_diaria",
+            "estoque_atual", "estoque_minimo", "Status",
+        ]].rename(columns={
+            "insumo": "Insumo",
+            "saida": "Saiu no período",
+            "unidade_medida": "Un.",
+            "media_diaria": "Média/dia",
+            "estoque_atual": "Estoque atual",
+            "estoque_minimo": "Mínimo",
+        })
+        st.dataframe(
+            visivel,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Saiu no período": st.column_config.NumberColumn(format="%.2f"),
+                "Média/dia": st.column_config.NumberColumn(format="%.2f"),
+                "Estoque atual": st.column_config.NumberColumn(format="%.1f"),
+                "Mínimo": st.column_config.NumberColumn(format="%.1f"),
+            },
+        )
+        st.download_button(
+            "Baixar em CSV",
+            data=visivel.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"saida-estoque-{inicio_iso}-a-{fim_iso}.csv",
+            mime="text/csv",
+            icon=":material/download:",
+        )
+
+    with aba_pratos:
+        st.caption("Quais pratos geraram essa saída.")
+        pratos = crud.pratos_vendidos_no_periodo(inicio_iso, fim_iso)
+        if pratos:
+            st.dataframe(
+                pd.DataFrame(pratos).rename(
+                    columns={"prato": "Prato", "vendidos": "Vendidos"}
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("Sem vendas no período.")
+
+    with aba_dias:
+        st.caption("Quanto cada dia do período pesou.")
+        por_dia = crud.vendas_por_dia_no_periodo(inicio_iso, fim_iso)
+        if por_dia:
+            _grafico_dia_a_dia(por_dia)
+            tabela = pd.DataFrame(por_dia)
+            tabela["data"] = tabela["data"].map(_data_br)
+            st.dataframe(
+                tabela.rename(columns={"data": "Data", "pratos_vendidos": "Pratos"}),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("Sem vendas no período.")
+
+
 # ---------- Cadastrar Insumo ----------
+
+def _estoques_minimos(insumos):
+    """Define o estoque mínimo de vários insumos de uma vez.
+
+    O mínimo é o que faz o sistema avisar antes de faltar: é ele que pinta
+    o semáforo do painel e dispara o alerta da barra lateral. Com o mínimo
+    em zero, esse aviso nunca acontece e o sistema vira só um registro do
+    passado. Definir um a um, em mais de cem insumos, é uma tarefa que na
+    prática não é feita — daí a tabela.
+    """
+    st.subheader("Estoque mínimo")
+
+    dados = crud.calcular_estoque_todos_insumos()
+    sem_minimo = [d for d in dados if not d["estoque_minimo"]]
+    if sem_minimo:
+        st.warning(
+            f"{len(sem_minimo)} de {len(dados)} insumo(s) estão com mínimo zero. "
+            "Enquanto estiverem assim, o painel nunca vai avisar que eles "
+            "estão acabando.",
+            icon=":material/notifications_off:",
+        )
+
+    with st.expander("Definir mínimos em lote", expanded=bool(sem_minimo)):
+        st.caption(
+            "Preencha só o que quiser mudar; o que ficar em branco continua "
+            "como está. O consumo médio por dia ajuda a escolher o número — "
+            "um mínimo razoável cobre o prazo de entrega do fornecedor."
+        )
+        cobertura = {c["insumo"]: c for c in crud.cobertura_estoque(30)}
+        linhas = [
+            {
+                "Insumo": d["insumo"],
+                "Un.": d["unidade_medida"],
+                "Estoque": d["estoque_atual"],
+                "Consumo/dia": cobertura.get(d["insumo"], {}).get("consumo_medio_diario", 0),
+                "Mínimo atual": d["estoque_minimo"],
+                "Novo mínimo": None,
+            }
+            for d in dados
+        ]
+        valores = _tabela_em_lote(
+            linhas, "Insumo", "Novo mínimo", "Novo mínimo", "minimos",
+            "%.2f", "Filtrar insumo",
+        )
+
+        itens = _como_itens(valores, "insumo", "estoque_minimo")
+        if not itens:
+            st.caption("Nenhum mínimo preenchido ainda.")
+            return
+
+        st.write(f"**{len(itens)} insumo(s) preenchido(s).**")
+        if st.button("💾 Gravar mínimos", type="primary", key="gravar_minimos"):
+            try:
+                total = crud.atualizar_estoques_minimos(itens)
+            except Exception as e:
+                st.error(f"Nada foi gravado: {e}")
+                return
+            st.success(f"{total} mínimo(s) atualizado(s).", icon=":material/check_circle:")
+            # A coluna "Novo mínimo" volta a ficar em branco: os valores
+            # já viraram o mínimo atual, mostrado na coluna ao lado.
+            st.session_state.pop("minimos_valores", None)
+            st.rerun()
+
 
 def pagina_insumos():
     st.title("🥬 Insumos")
@@ -779,17 +1149,21 @@ def pagina_insumos():
         else:
             st.error("Informe o nome do insumo.")
 
+    insumos_existentes = listar_insumos()
+    if not insumos_existentes:
+        st.divider()
+        st.info("Nenhum insumo cadastrado ainda.")
+        return
+
+    st.divider()
+    _estoques_minimos(insumos_existentes)
+
     st.divider()
     st.subheader("Excluir insumo")
     st.caption(
         "⚠️ Isso apaga o insumo e todo o histórico ligado a ele "
         "(ficha técnica, compras e contagens). Não tem como desfazer."
     )
-
-    insumos_existentes = listar_insumos()
-    if not insumos_existentes:
-        st.info("Nenhum insumo cadastrado ainda.")
-        return
 
     insumo_excluir = st.selectbox("Selecione o insumo para excluir", insumos_existentes)
     confirmar = st.checkbox(f"Confirmo que quero excluir '{insumo_excluir}' permanentemente")
@@ -1083,7 +1457,7 @@ def pagina_compra():
         quantidade = st.number_input(
             f"Quantidade comprada ({unidades[insumo]})", min_value=0.0, step=0.5
         )
-        data = st.date_input("Data da compra", value=datetime.date.today())
+        data = st.date_input("Data da compra", value=crud.hoje())
         fornecedor = st.text_input("Fornecedor (opcional)")
         enviado = st.form_submit_button("Registrar")
 
@@ -1208,62 +1582,332 @@ def pagina_nfe():
         st.session_state.pop("nfe_dados", None)
 
 
+# ---------- Lançar Nota Fiscal (manual) ----------
+
+COLUNAS_DA_NOTA = ["Insumo", "Quantidade"]
+
+
+def _itens_digitados(tabela) -> list[dict]:
+    """Transforma a tabela editável em itens de compra, descartando linha vazia.
+
+    A tabela nasce com linhas em branco e ganha outras conforme se digita,
+    então linha sem insumo ou sem quantidade é rascunho, não item.
+    """
+    itens = []
+    for _, linha in tabela.iterrows():
+        insumo = linha["Insumo"]
+        quantidade = linha["Quantidade"]
+        # Célula vazia pode chegar como None ou como NaN — e NaN é truthy,
+        # então testar só `not insumo` deixaria passar linha em branco.
+        if pd.isna(insumo) or not insumo:
+            continue
+        if pd.isna(quantidade) or float(quantidade) <= 0:
+            continue
+        itens.append({"insumo": insumo, "quantidade": float(quantidade)})
+    return itens
+
+
+def pagina_nf_manual():
+    st.title("🧾 Lançar Nota Fiscal (manual)")
+    st.caption(
+        "Para a nota que chega sem XML: em papel, em PDF, ou do fornecedor "
+        "que não manda o arquivo. Os itens são digitados aqui e entram no "
+        "estoque do mesmo jeito que os da importação automática."
+    )
+
+    insumos = listar_insumos()
+    if not insumos:
+        st.info("Cadastre um insumo antes de lançar notas.")
+        return
+
+    unidades = unidades_dos_insumos()
+
+    col1, col2, col3 = st.columns([2, 1, 1])
+    fornecedor = col1.text_input("Fornecedor", key="nf_fornecedor")
+    numero = col2.text_input("Número da nota", key="nf_numero")
+    data = col3.date_input("Data da nota", value=crud.hoje(), key="nf_data")
+
+    st.write("**Itens da nota**")
+    st.caption(
+        "Uma linha por item. A quantidade é na unidade em que o insumo é "
+        "controlado — se a nota vem em caixa e o insumo é em kg, converta aqui."
+    )
+
+    # A tabela começa sem nenhuma linha, e não com uma linha em branco: o
+    # Streamlit escreve "None" em célula vazia, e uma nota que abre com
+    # "None / None" parece defeito. Com num_rows="dynamic" a linha de
+    # acrescentar já fica ali embaixo, que é o convite certo.
+    tabela = st.data_editor(
+        pd.DataFrame({
+            "Insumo": pd.Series([], dtype="object"),
+            "Quantidade": pd.Series([], dtype="float64"),
+        }),
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        key="nf_itens",
+        column_config={
+            "Insumo": st.column_config.SelectboxColumn(
+                "Insumo", options=insumos, required=False, width="large"
+            ),
+            "Quantidade": st.column_config.NumberColumn(
+                "Quantidade", min_value=0.0, step=0.5, format="%.3f"
+            ),
+        },
+    )
+
+    itens = _itens_digitados(tabela)
+    if not itens:
+        st.info("Preencha ao menos um item para lançar a nota.")
+        return
+
+    previa = pd.DataFrame([
+        {
+            "Insumo": item["insumo"],
+            "Quantidade": item["quantidade"],
+            "Un.": unidades.get(item["insumo"], ""),
+        }
+        for item in itens
+    ])
+    st.write(f"**Prévia — {len(itens)} item(ns)**")
+    st.dataframe(previa, width="stretch", hide_index=True)
+
+    # Nota já lançada é o erro mais caro desta tela: ela dobra o estoque
+    # sem deixar rastro. O número da nota existe justamente para pegar isso.
+    duplicada = None
+    try:
+        duplicada = crud.nota_ja_lancada(numero.strip(), fornecedor.strip() or None)
+    except Exception as e:
+        st.error(f"Não consegui conferir se esta nota já foi lançada: {e}")
+
+    confirmado = True
+    if duplicada:
+        st.warning(
+            f"A nota **{numero}** já tem {duplicada['itens']} item(ns) lançado(s) "
+            f"em {_data_br(duplicada['data'])}. Lançar de novo vai somar tudo "
+            "outra vez no estoque.",
+            icon=":material/warning:",
+        )
+        confirmado = st.checkbox("Conferi, quero lançar mesmo assim", key="nf_confirma")
+
+    if not numero.strip():
+        st.caption(
+            "Sem o número da nota o sistema não consegue avisar se ela já foi "
+            "lançada. Vale preencher."
+        )
+
+    if st.button("📥 Lançar nota no estoque", type="primary", disabled=not confirmado):
+        try:
+            total = crud.registrar_compras_em_lote(
+                itens,
+                str(data),
+                fornecedor=fornecedor.strip() or None,
+                numero_nota=numero.strip() or None,
+                observacao="Nota lançada manualmente",
+            )
+        except Exception as e:
+            st.error(f"Nada foi lançado: {e}")
+        else:
+            st.success(
+                f"{total} compra(s) lançada(s) em {_data_br(str(data))}.",
+                icon=":material/check_circle:",
+            )
+            # Leitura de volta: o estoque mostrado vem do banco depois do
+            # commit, então confirma que a nota entrou de verdade.
+            estoques = {e["insumo"]: e for e in crud.calcular_estoque_todos_insumos()}
+            depois = pd.DataFrame([
+                {
+                    "Insumo": item["insumo"],
+                    "Entrou": item["quantidade"],
+                    "Un.": unidades.get(item["insumo"], ""),
+                    "Estoque agora": estoques.get(item["insumo"], {}).get("estoque_atual"),
+                }
+                for item in itens
+            ])
+            st.dataframe(depois, width="stretch", hide_index=True)
+            st.caption("Gravado em " + database.descricao_do_backend() + ".")
+
+
 # ---------- Lançar Venda ----------
+
+def _ficha_do_prato(prato: str, quantidade: float):
+    """Mostra o que a venda tira do estoque, antes e depois de lançar."""
+    impacto = crud.impacto_da_venda(prato, quantidade)
+    if not impacto:
+        st.warning(
+            f"**{prato}** não tem ficha técnica. Lançar esta venda registra o "
+            "prato vendido, mas **não desconta nada do estoque** — monte a "
+            "ficha em *Ficha Técnica* para o consumo passar a ser calculado.",
+            icon=":material/warning:",
+        )
+        return
+
+    linhas = ", ".join(
+        f"{i['insumo']} {i['consumo']:g} {i['unidade_medida']}" for i in impacto[:6]
+    )
+    resto = f" (+{len(impacto) - 6} insumo(s))" if len(impacto) > 6 else ""
+    st.caption(f"Sai do estoque: {linhas}{resto}")
+
+
+def _venda_em_lote(pratos, data_iso):
+    """A tela do dia a dia: todos os pratos numa tabela, um envio só.
+
+    Lançar prato a prato, num formulário por vez, são dezenas de envios
+    por dia — a operação não sobrevive a isso, e o dia acaba não sendo
+    lançado. A tabela vem preenchida com o que já está gravado naquela
+    data, então reabrir a tela mostra o estado atual e permite corrigir.
+    """
+    lancado = {v["prato"]: v["quantidade"] for v in crud.vendas_do_dia(data_iso)}
+    if lancado:
+        st.info(
+            f"{len(lancado)} prato(s) já lançado(s) em {_data_br(data_iso)}. "
+            "Os valores vêm preenchidos; gravar de novo corrige, não duplica.",
+            icon=":material/history:",
+        )
+
+    st.write(
+        "**Preencha o que vendeu.** Em branco = não mexe. "
+        "**0** apaga o lançamento daquele prato no dia."
+    )
+    linhas = [{"Prato": nome, "Qtd.": lancado.get(nome)} for nome in pratos]
+    valores = _tabela_em_lote(
+        linhas, "Prato", "Qtd.", "Qtd.", f"venda_lote_{data_iso}",
+        "%d", "Filtrar prato", passo=1,
+    )
+
+    itens = _como_itens(valores, "prato", "quantidade")
+    if not itens:
+        st.caption("Nenhuma venda preenchida ainda.")
+        return
+
+    total = sum(i["quantidade"] for i in itens)
+    st.write(f"**{len(itens)} prato(s) preenchido(s)** · {total:g} unidade(s).")
+
+    sem_ficha = [i["prato"] for i in itens
+                 if i["quantidade"] > 0 and not crud.impacto_da_venda(i["prato"], 1)]
+    if sem_ficha:
+        st.warning(
+            f"{len(sem_ficha)} prato(s) sem ficha técnica não vão descontar nada "
+            "do estoque: " + ", ".join(sem_ficha[:8])
+            + ("…" if len(sem_ficha) > 8 else ""),
+            icon=":material/warning:",
+        )
+
+    if st.button("💾 Gravar vendas do dia", type="primary", key="venda_lote_gravar"):
+        try:
+            resultado = crud.lancar_vendas_em_lote(itens, data_iso)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+
+        st.success(
+            f"{resultado['gravados']} prato(s) gravado(s) em {_data_br(data_iso)}"
+            + (f", {resultado['apagados']} apagado(s)." if resultado["apagados"] else "."),
+            icon=":material/check_circle:",
+        )
+        # Leitura de volta: o que a tela mostra agora vem do banco.
+        confere = crud.vendas_do_dia(data_iso)
+        if confere:
+            df = pd.DataFrame(confere).rename(columns={"prato": "Prato", "quantidade": "Qtd."})
+            st.dataframe(df, width="stretch", hide_index=True)
+            st.caption(
+                f"{len(confere)} prato(s) · {df['Qtd.'].sum():g} unidade(s) gravadas em "
+                + database.descricao_do_backend() + "."
+            )
+
+
+def _venda_um_prato(pratos, data_iso):
+    """Lançamento avulso, para corrigir ou completar um prato só."""
+    prato = st.selectbox("Prato", pratos, key="venda_prato")
+
+    try:
+        ja_lancado = crud.total_vendido_no_dia(prato, data_iso)
+    except Exception as e:
+        st.error(f"Não consegui consultar o que já está lançado: {e}")
+        return
+
+    if ja_lancado:
+        st.info(
+            f"**{prato}** já tem **{ja_lancado:g}** lançado(s) em "
+            f"{_data_br(data_iso)}.",
+            icon=":material/history:",
+        )
+
+    with st.form("form_venda"):
+        quantidade = st.number_input("Quantidade vendida", min_value=1, step=1, value=1)
+        # 'Substituir' é o padrão de propósito. O lançamento manual é feito
+        # olhando o total do dia no PDV, então o número digitado É o total —
+        # e, sendo substituição, clicar duas vezes no botão dá o mesmo
+        # resultado que clicar uma. Era exatamente assim que nascia o
+        # lançamento em dobro que inflava o consumo.
+        modo = st.radio(
+            "O que fazer com o que já está lançado neste dia",
+            ["Substituir o total do dia", "Somar ao que já está lançado"],
+            horizontal=True,
+            help=(
+                "Substituir deixa o dia valendo exatamente o número digitado — "
+                "é o modo seguro para relançar sem duplicar. Somar serve quando "
+                "você está completando um lançamento parcial."
+            ),
+        )
+        enviado = st.form_submit_button("Registrar", type="primary")
+
+    if not enviado:
+        _ficha_do_prato(prato, quantidade)
+    else:
+        try:
+            # O total volta lido do banco, depois do commit: o que a tela
+            # mostra é o que ficou gravado, não o que o formulário mandou.
+            total = crud.lancar_venda(
+                prato, int(quantidade), data_iso,
+                substituir=modo.startswith("Substituir"),
+            )
+        except Exception as e:
+            st.error(f"A venda **não** foi registrada: {e}")
+        else:
+            st.success(
+                f"Gravado. **{prato}** em {_data_br(data_iso)}: "
+                f"**{total:g}** unidade(s) no total do dia.",
+                icon=":material/check_circle:",
+            )
+            _ficha_do_prato(prato, total)
+
 
 def pagina_venda():
     st.title("💰 Lançar Venda do Dia")
-    st.caption("Digite quantos de cada prato foram vendidos hoje, olhando o resumo do PDV.")
+    st.caption(
+        "Digite quantos de cada prato foram vendidos, olhando o resumo do PDV. "
+        "O número lançado aqui é o que desconta do estoque."
+    )
 
     pratos = listar_pratos()
     if not pratos:
         st.info("Cadastre um prato antes de lançar vendas.")
         return
 
-    with st.form("form_venda"):
-        prato = st.selectbox("Prato", pratos)
-        quantidade = st.number_input("Quantidade vendida", min_value=0, step=1)
-        data = st.date_input("Data da venda", value=datetime.date.today())
-        enviado = st.form_submit_button("Registrar")
+    data = st.date_input("Data da venda", value=crud.hoje(), key="venda_data")
+    data_iso = str(data)
 
-    if enviado:
-        try:
-            ja_lancado = crud.total_vendido_no_dia(prato, str(data))
-        except Exception as e:
-            st.error(f"Erro: {e}")
-            ja_lancado = None
+    aba_lote, aba_um = st.tabs(["O dia inteiro (tabela)", "Um prato"])
+    with aba_lote:
+        _venda_em_lote(pratos, data_iso)
+    with aba_um:
+        _venda_um_prato(pratos, data_iso)
 
-        if ja_lancado:
-            st.session_state["venda_pendente"] = {
-                "prato": prato,
-                "quantidade": quantidade,
-                "data": str(data),
-                "ja_lancado": ja_lancado,
-            }
-        elif ja_lancado == 0:
-            crud.registrar_venda_diaria(prato, quantidade, str(data))
-            st.success("Venda registrada!")
-
-    pendente = st.session_state.get("venda_pendente")
-    if pendente:
-        st.warning(
-            f"Já existe(m) {pendente['ja_lancado']:.0f} unidade(s) de "
-            f"**{pendente['prato']}** lançada(s) em {pendente['data']}. "
-            f"Isso pode ser um lançamento duplicado (ex: clique duplo no botão). "
-            f"Confirma que quer somar mais {pendente['quantidade']:.0f}?"
+    st.divider()
+    st.subheader(f"Lançado em {_data_br(data_iso)}")
+    do_dia = crud.vendas_do_dia(data_iso)
+    if not do_dia:
+        st.caption("Nenhuma venda lançada neste dia ainda.")
+    else:
+        df = pd.DataFrame(do_dia).rename(
+            columns={"prato": "Prato", "quantidade": "Qtd."}
         )
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Sim, somar mesmo assim"):
-                crud.registrar_venda_diaria(
-                    pendente["prato"], pendente["quantidade"], pendente["data"]
-                )
-                st.success("Venda registrada!")
-                del st.session_state["venda_pendente"]
-                st.rerun()
-        with col2:
-            if st.button("Cancelar"):
-                del st.session_state["venda_pendente"]
-                st.rerun()
+        st.dataframe(df, width="stretch", hide_index=True)
+        st.caption(
+            f"{len(do_dia)} prato(s) · {df['Qtd.'].sum():g} unidade(s) no dia. "
+            "Gravado em " + database.descricao_do_backend() + "."
+        )
 
 
 # ---------- Importar Vendas do PDV (Zig) ----------
@@ -1477,30 +2121,112 @@ def pagina_zig():
 
 def pagina_contagem():
     st.title("✅ Contagem Física Mensal")
-    st.caption("Use isso 1x por mês para reconciliar o estoque teórico com o real.")
+    st.caption(
+        "A contagem do mês inteiro numa tabela só. Ela vira a nova base do "
+        "cálculo automático — a partir dela, estoque é compra menos consumo."
+    )
 
     insumos = listar_insumos()
     if not insumos:
         st.info("Cadastre um insumo antes de registrar contagem.")
         return
 
+    col_data, col_obs = st.columns([1, 2])
+    data = col_data.date_input("Data da contagem", value=crud.hoje(), key="contagem_data")
+    observacao = col_obs.text_input("Observação (opcional)", key="contagem_obs")
+    data_iso = str(data)
+
+    # A contagem é feita de manhã, antes do movimento: a convenção do
+    # sistema é que ela mede o estoque *antes* dos lançamentos do próprio
+    # dia, e por isso as vendas do dia da contagem já são descontadas dela.
+    st.caption(
+        "Conte antes de abrir. As vendas lançadas no mesmo dia da contagem "
+        "já são descontadas desta base."
+    )
+
     unidades = unidades_dos_insumos()
-    insumo = st.selectbox("Insumo", insumos)
+    teoricos = {e["insumo"]: e["estoque_atual"] for e in crud.calcular_estoque_todos_insumos()}
+    ja_contados = crud.contagens_do_dia(data_iso)
 
-    with st.form("form_contagem"):
-        quantidade = st.number_input(
-            f"Quantidade contada fisicamente ({unidades[insumo]})", min_value=0.0, step=0.5
+    if ja_contados:
+        st.info(
+            f"{len(ja_contados)} insumo(s) já contado(s) em {_data_br(data_iso)}. "
+            "Os valores vêm preenchidos abaixo; gravar de novo corrige, não duplica.",
+            icon=":material/history:",
         )
-        data = st.date_input("Data da contagem", value=datetime.date.today())
-        observacao = st.text_input("Observação (opcional)")
-        enviado = st.form_submit_button("Registrar")
 
-    if enviado:
+    linhas = [
+        {
+            "Insumo": nome,
+            "Un.": unidades.get(nome, ""),
+            "Teórico": teoricos.get(nome),
+            "Contagem": ja_contados.get(nome),
+        }
+        for nome in insumos
+    ]
+
+    st.write("**Preencha o que foi contado. Deixe em branco o que não contou.**")
+    # A data entra na chave: trocar de dia não pode carregar os números
+    # que já tinham sido digitados para o dia anterior.
+    valores = _tabela_em_lote(
+        linhas, "Insumo", "Contagem", "Contagem", f"contagem_{data_iso}",
+        "%.3f", "Filtrar insumo",
+    )
+
+    itens = _como_itens(valores, "insumo", "quantidade")
+    if not itens:
+        st.caption("Nenhuma contagem preenchida ainda.")
+        return
+
+    st.write(f"**{len(itens)} insumo(s) preenchido(s)** de {len(insumos)}.")
+
+    if st.button("💾 Gravar contagem", type="primary"):
         try:
-            crud.registrar_contagem_fisica(insumo, quantidade, str(data), observacao or None)
-            st.success("Contagem registrada! Ela vira a nova base do cálculo automático.")
+            total = crud.registrar_contagens_em_lote(
+                itens, data_iso, observacao.strip() or None
+            )
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Nada foi gravado: {e}")
+            return
+
+        st.success(
+            f"{total} contagem(ns) gravada(s) em {_data_br(data_iso)}. "
+            "Esta é a nova base do cálculo.",
+            icon=":material/check_circle:",
+        )
+
+        # A diferença entre o que o sistema calculava e o que foi contado é
+        # a informação que a contagem existe para produzir. Mostrar na hora
+        # evita que ela só apareça na tela de perdas, um mês depois.
+        gravados = {i["insumo"]: i["quantidade"] for i in itens}
+        diferencas = []
+        for nome, contado in gravados.items():
+            teorico = teoricos.get(nome)
+            if teorico is None:
+                continue
+            diferencas.append({
+                "Insumo": nome,
+                "Teórico": teorico,
+                "Contado": contado,
+                "Diferença": round(contado - teorico, 3),
+                "Un.": unidades.get(nome, ""),
+            })
+        divergentes = [d for d in diferencas if abs(d["Diferença"]) > 0.001]
+        if divergentes:
+            st.write(f"**{len(divergentes)} insumo(s) diferentes do calculado**")
+            st.dataframe(
+                pd.DataFrame(sorted(divergentes, key=lambda d: -abs(d["Diferença"]))),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption(
+                "Diferença negativa: havia menos no estoque do que o sistema "
+                "calculava — perda, quebra ou porção maior que a ficha. "
+                "Positiva: sobrou mais, o que costuma ser venda ou compra não "
+                "lançada. A tela de Perdas detalha isso entre duas contagens."
+            )
+        else:
+            st.caption("Nenhuma divergência em relação ao calculado.")
 
 
 def _explicacao_da_conta():
@@ -1679,6 +2405,10 @@ PG_DASHBOARD = st.Page(
 PG_PAINEL = st.Page(
     pagina_painel, title="Painel de Estoque", icon=":material/inventory_2:", url_path="painel"
 )
+PG_SAIDA = st.Page(
+    pagina_saida, title="Saída de Estoque", icon=":material/trending_down:",
+    url_path="saida",
+)
 PG_INSUMOS = st.Page(
     pagina_insumos, title="Insumos", icon=":material/nutrition:", url_path="insumos"
 )
@@ -1698,6 +2428,10 @@ PG_COMPRA = st.Page(
 )
 PG_NFE = st.Page(
     pagina_nfe, title="Importar Nota Fiscal", icon=":material/upload_file:", url_path="nota-fiscal"
+)
+PG_NF_MANUAL = st.Page(
+    pagina_nf_manual, title="Lançar Nota Fiscal", icon=":material/edit_note:",
+    url_path="nota-manual",
 )
 PG_VENDA = st.Page(
     pagina_venda, title="Lançar Venda do Dia", icon=":material/point_of_sale:", url_path="venda"
@@ -1731,12 +2465,14 @@ PG_USUARIOS = st.Page(
 PAGINAS_POR_AREA = {
     "dashboard": PG_DASHBOARD,
     "painel": PG_PAINEL,
+    "saida": PG_SAIDA,
     "insumos": PG_INSUMOS,
     "pratos": PG_PRATOS,
     "ficha": PG_FICHA,
     "ficha_import": PG_FICHA_IMPORT,
     "compra": PG_COMPRA,
     "nfe": PG_NFE,
+    "nf_manual": PG_NF_MANUAL,
     "zig": PG_ZIG,
     "venda": PG_VENDA,
     "contagem": PG_CONTAGEM,
@@ -1749,12 +2485,14 @@ def _liberadas(*areas):
 
 
 menu = {}
-if _liberadas("dashboard", "painel", "perdas"):
-    menu["Visão geral"] = _liberadas("dashboard", "painel", "perdas")
+if _liberadas("dashboard", "painel", "saida", "perdas"):
+    menu["Visão geral"] = _liberadas("dashboard", "painel", "saida", "perdas")
 if _liberadas("insumos", "pratos", "ficha", "ficha_import"):
     menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha", "ficha_import")
-if _liberadas("compra", "nfe", "zig", "venda", "contagem"):
-    menu["Lançamentos"] = _liberadas("compra", "nfe", "zig", "venda", "contagem")
+if _liberadas("compra", "nf_manual", "nfe", "zig", "venda", "contagem"):
+    menu["Lançamentos"] = _liberadas(
+        "compra", "nf_manual", "nfe", "zig", "venda", "contagem"
+    )
 
 menu["Conta"] = [PG_MINHA_CONTA]
 if E_ADMIN:
@@ -1800,7 +2538,7 @@ with st.sidebar:
         alertas = crud.resumo_dashboard(30)["abaixo_do_minimo"]
         if alertas:
             st.error(f"⚠️ {alertas} insumo(s) abaixo do mínimo")
-    st.caption(f"Hoje: {datetime.date.today().strftime('%d/%m/%Y')}")
+    st.caption(f"Hoje: {crud.hoje().strftime('%d/%m/%Y')}")
 
 if st.session_state.pop("_sem_areas", False):
     st.info(

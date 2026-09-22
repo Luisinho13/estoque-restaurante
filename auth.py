@@ -25,6 +25,7 @@ ITERACOES = 200_000
 AREAS = {
     "dashboard": "Dashboard",
     "painel": "Painel de Estoque",
+    "saida": "Saída de Estoque no Período",
     "perdas": "Perdas e Reconciliação",
     "insumos": "Insumos",
     "pratos": "Pratos",
@@ -32,6 +33,7 @@ AREAS = {
     "ficha_import": "Importar Ficha Técnica",
     "compra": "Lançar Compra",
     "nfe": "Importar Nota Fiscal",
+    "nf_manual": "Lançar Nota Fiscal (manual)",
     "zig": "Importar Vendas (PDV)",
     "venda": "Lançar Venda do Dia",
     "contagem": "Contagem Física",
@@ -39,7 +41,7 @@ AREAS = {
 
 # Sugestão de acesso para quem é aprovado sem nenhuma escolha explícita:
 # só consulta, nada que altere o estoque.
-AREAS_PADRAO = ["dashboard", "painel"]
+AREAS_PADRAO = ["dashboard", "painel", "saida"]
 
 
 # ---------- Senha ----------

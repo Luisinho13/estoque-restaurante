@@ -17,6 +17,25 @@ from database import get_connection
 
 SEM_CONTAGEM = "sem contagem física ainda"
 
+# O servidor do Streamlit Cloud roda em UTC, e o restaurante fecha de
+# madrugada. Às 23h de Brasília o `date.today()` do servidor já virou o
+# dia seguinte — quem lançasse as vendas no fim do expediente veria a data
+# de amanhã preenchida no formulário, e o movimento da noite cairia no dia
+# errado. A data do sistema passa a ser sempre a de Brasília.
+try:
+    from zoneinfo import ZoneInfo
+
+    FUSO = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    # Container sem a base de fusos instalada. O horário de Brasília é
+    # UTC-3 fixo desde que o Brasil acabou com o horário de verão, em 2019.
+    FUSO = datetime.timezone(datetime.timedelta(hours=-3))
+
+
+def hoje() -> datetime.date:
+    """A data de hoje no fuso do restaurante, não no do servidor."""
+    return datetime.datetime.now(FUSO).date()
+
 
 # ---------- Cadastros ----------
 
@@ -102,7 +121,8 @@ def excluir_prato(nome: str):
 # ---------- Lançamentos ----------
 
 def registrar_compra(insumo_nome: str, quantidade: float, data: str,
-                      fornecedor: str = None, observacao: str = None):
+                      fornecedor: str = None, observacao: str = None,
+                      numero_nota: str = None):
     conn = get_connection()
     insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (insumo_nome,)).fetchone()
     if not insumo:
@@ -110,12 +130,86 @@ def registrar_compra(insumo_nome: str, quantidade: float, data: str,
         raise ValueError(f"Insumo '{insumo_nome}' não encontrado.")
 
     conn.execute(
-        """INSERT INTO compras (insumo_id, quantidade, data, fornecedor, observacao)
-           VALUES (?, ?, ?, ?, ?)""",
-        (insumo["id"], quantidade, data, fornecedor, observacao),
+        """INSERT INTO compras (insumo_id, quantidade, data, fornecedor, observacao, numero_nota)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (insumo["id"], quantidade, data, fornecedor, observacao, numero_nota),
     )
     conn.commit()
     conn.close()
+
+
+def registrar_compras_em_lote(itens: list[dict], data: str, fornecedor: str = None,
+                               numero_nota: str = None, observacao: str = None) -> int:
+    """Lança de uma vez todos os itens de uma nota digitada à mão.
+
+    `itens` é uma lista de {'insumo': nome, 'quantidade': float}. Os
+    insumos são todos resolvidos **antes** de qualquer INSERT: se um nome
+    estiver errado, nada é gravado. Meia nota lançada seria pior que nota
+    nenhuma — o estoque ficaria alto sem ninguém saber de onde veio.
+    """
+    if not itens:
+        raise ValueError("A nota não tem nenhum item para lançar.")
+
+    conn = get_connection()
+    try:
+        resolvidos = []
+        for item in itens:
+            quantidade = float(item["quantidade"])
+            if quantidade <= 0:
+                raise ValueError(
+                    f"A quantidade de '{item['insumo']}' precisa ser maior que zero."
+                )
+            insumo = conn.execute(
+                "SELECT id FROM insumos WHERE nome = ?", (item["insumo"],)
+            ).fetchone()
+            if not insumo:
+                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+            resolvidos.append((insumo["id"], quantidade))
+
+        for insumo_id, quantidade in resolvidos:
+            conn.execute(
+                """INSERT INTO compras
+                       (insumo_id, quantidade, data, fornecedor, observacao, numero_nota)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (insumo_id, quantidade, data, fornecedor, observacao, numero_nota),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(resolvidos)
+
+
+def nota_ja_lancada(numero_nota: str, fornecedor: str = None) -> dict | None:
+    """Procura uma nota já lançada com esse número, para não lançar duas vezes.
+
+    O número da nota sozinho não é único no mundo — dois fornecedores
+    podem ter a nota 1234 —, então o fornecedor entra na busca quando é
+    informado. Devolve um resumo do que foi lançado, ou None.
+    """
+    if not numero_nota:
+        return None
+
+    conn = get_connection()
+    if fornecedor:
+        linha = conn.execute(
+            """SELECT COUNT(*) AS itens, MIN(data) AS data
+               FROM compras WHERE numero_nota = ? AND fornecedor = ?""",
+            (numero_nota, fornecedor),
+        ).fetchone()
+    else:
+        linha = conn.execute(
+            """SELECT COUNT(*) AS itens, MIN(data) AS data
+               FROM compras WHERE numero_nota = ?""",
+            (numero_nota,),
+        ).fetchone()
+    conn.close()
+
+    if not linha or not linha["itens"]:
+        return None
+    return {"itens": linha["itens"], "data": linha["data"]}
 
 
 def total_vendido_no_dia(prato_nome: str, data: str) -> float:
@@ -172,6 +266,101 @@ def substituir_venda_diaria(prato_nome: str, quantidade: int, data: str):
     conn.close()
 
 
+def lancar_venda(prato_nome: str, quantidade: int, data: str,
+                 substituir: bool = False) -> float:
+    """Lança a venda de um prato num dia e devolve o total gravado nesse dia.
+
+    É o caminho único da tela de lançamento manual. Duas coisas que a
+    versão anterior não fazia e custaram caro:
+
+    - **devolve o total lido de volta do banco**, depois do commit, em vez
+      de confiar no número que veio do formulário. A tela mostra o que
+      está gravado; se o INSERT não tiver pegado, o número não muda e o
+      problema aparece na hora, em vez de só na conferência da semana;
+    - **recusa quantidade zero ou negativa**, que só criava linha inútil.
+
+    `substituir=True` deixa o dia valendo exatamente `quantidade`, como
+    faz a importação da Zig. `False` soma ao que já havia.
+    """
+    if quantidade <= 0:
+        raise ValueError("A quantidade vendida precisa ser maior que zero.")
+
+    conn = get_connection()
+    prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()
+    if not prato:
+        conn.close()
+        raise ValueError(f"Prato '{prato_nome}' não encontrado.")
+
+    prato_id = prato["id"]
+    if substituir:
+        conn.execute(
+            "DELETE FROM vendas_diarias WHERE prato_id = ? AND data = ?", (prato_id, data)
+        )
+    conn.execute(
+        "INSERT INTO vendas_diarias (prato_id, quantidade, data) VALUES (?, ?, ?)",
+        (prato_id, quantidade, data),
+    )
+    conn.commit()
+
+    total = conn.execute(
+        """SELECT COALESCE(SUM(quantidade), 0) AS total
+           FROM vendas_diarias WHERE prato_id = ? AND data = ?""",
+        (prato_id, data),
+    ).fetchone()["total"]
+    conn.close()
+    return total
+
+
+def vendas_do_dia(data: str) -> list[dict]:
+    """Tudo que está lançado num dia, prato a prato. É a conferência da tela."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT p.nome AS prato, SUM(v.quantidade) AS quantidade
+        FROM vendas_diarias v
+        JOIN pratos p ON p.id = v.prato_id
+        WHERE v.data = ?
+        GROUP BY p.id, p.nome
+        ORDER BY p.nome
+        """,
+        (data,),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def impacto_da_venda(prato_nome: str, quantidade: float) -> list[dict]:
+    """Quanto de cada insumo essa venda tira do estoque, pela ficha técnica.
+
+    Serve para a tela mostrar o efeito do lançamento no mesmo instante.
+    Prato sem ficha técnica devolve lista vazia — e essa lista vazia é
+    informação: é exatamente o caso em que lançar a venda não mexe em
+    nada no estoque.
+    """
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo, i.unidade_medida,
+               ft.quantidade_por_prato
+        FROM ficha_tecnica ft
+        JOIN pratos p ON p.id = ft.prato_id
+        JOIN insumos i ON i.id = ft.insumo_id
+        WHERE p.nome = ?
+        ORDER BY i.nome
+        """,
+        (prato_nome,),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "insumo": linha["insumo"],
+            "unidade_medida": linha["unidade_medida"],
+            "consumo": round(linha["quantidade_por_prato"] * quantidade, 3),
+        }
+        for linha in linhas
+    ]
+
+
 def registrar_contagem_fisica(insumo_nome: str, quantidade_contada: float, data: str,
                                observacao: str = None):
     conn = get_connection()
@@ -187,6 +376,166 @@ def registrar_contagem_fisica(insumo_nome: str, quantidade_contada: float, data:
     )
     conn.commit()
     conn.close()
+
+
+def contagens_do_dia(data: str) -> dict:
+    """{nome do insumo: quantidade contada} numa data. Serve para pré-preencher a tela."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome, c.quantidade_contada
+        FROM contagens_fisicas c
+        JOIN insumos i ON i.id = c.insumo_id
+        WHERE c.data = ?
+        ORDER BY c.id
+        """,
+        (data,),
+    ).fetchall()
+    conn.close()
+    # O último lançamento do dia é o que vale, caso exista mais de um.
+    return {linha["nome"]: linha["quantidade_contada"] for linha in linhas}
+
+
+def registrar_contagens_em_lote(itens: list[dict], data: str,
+                                 observacao: str = None) -> int:
+    """Grava a contagem de vários insumos de uma vez, num dia só.
+
+    `itens` é uma lista de {'insumo': nome, 'quantidade': float}. Cada
+    insumo **substitui** a contagem que já existisse nesse mesmo dia, em
+    vez de somar outra linha: gravar duas vezes dá o mesmo resultado que
+    gravar uma. Numa contagem de mais de cem insumos, feita com o celular
+    na mão no meio do estoque, reenviar a tela é acidente esperado.
+
+    Os insumos são todos resolvidos antes de qualquer escrita — uma
+    contagem pela metade seria pior que nenhuma, porque viraria a base do
+    cálculo mesmo assim.
+    """
+    if not itens:
+        raise ValueError("Nenhuma contagem preenchida para gravar.")
+
+    conn = get_connection()
+    try:
+        resolvidos = []
+        for item in itens:
+            quantidade = float(item["quantidade"])
+            if quantidade < 0:
+                raise ValueError(
+                    f"A contagem de '{item['insumo']}' não pode ser negativa."
+                )
+            insumo = conn.execute(
+                "SELECT id FROM insumos WHERE nome = ?", (item["insumo"],)
+            ).fetchone()
+            if not insumo:
+                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+            resolvidos.append((insumo["id"], quantidade))
+
+        for insumo_id, quantidade in resolvidos:
+            conn.execute(
+                "DELETE FROM contagens_fisicas WHERE insumo_id = ? AND data = ?",
+                (insumo_id, data),
+            )
+            conn.execute(
+                """INSERT INTO contagens_fisicas
+                       (insumo_id, quantidade_contada, data, observacao)
+                   VALUES (?, ?, ?, ?)""",
+                (insumo_id, quantidade, data, observacao),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(resolvidos)
+
+
+def lancar_vendas_em_lote(itens: list[dict], data: str) -> dict:
+    """Lança a venda de vários pratos num dia só.
+
+    `itens` é uma lista de {'prato': nome, 'quantidade': int}. Cada prato
+    passa a valer exatamente a quantidade informada naquele dia:
+
+    - quantidade maior que zero **substitui** o total do prato no dia;
+    - quantidade zero **apaga** o lançamento daquele prato no dia, que é
+      como se corrige um prato lançado por engano;
+    - prato que não estiver na lista não é tocado.
+
+    Devolve quantos pratos foram gravados e quantos foram apagados.
+    """
+    if not itens:
+        raise ValueError("Nenhuma venda preenchida para gravar.")
+
+    conn = get_connection()
+    try:
+        resolvidos = []
+        for item in itens:
+            quantidade = int(item["quantidade"])
+            if quantidade < 0:
+                raise ValueError(
+                    f"A venda de '{item['prato']}' não pode ser negativa."
+                )
+            prato = conn.execute(
+                "SELECT id FROM pratos WHERE nome = ?", (item["prato"],)
+            ).fetchone()
+            if not prato:
+                raise ValueError(f"Prato '{item['prato']}' não encontrado.")
+            resolvidos.append((prato["id"], quantidade))
+
+        gravados = apagados = 0
+        for prato_id, quantidade in resolvidos:
+            conn.execute(
+                "DELETE FROM vendas_diarias WHERE prato_id = ? AND data = ?",
+                (prato_id, data),
+            )
+            if quantidade > 0:
+                conn.execute(
+                    "INSERT INTO vendas_diarias (prato_id, quantidade, data) VALUES (?, ?, ?)",
+                    (prato_id, quantidade, data),
+                )
+                gravados += 1
+            else:
+                apagados += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return {"gravados": gravados, "apagados": apagados}
+
+
+def atualizar_estoques_minimos(itens: list[dict]) -> int:
+    """Grava o estoque mínimo de vários insumos de uma vez.
+
+    O mínimo é o que liga a camada de alerta do sistema — sem ele, o
+    semáforo do painel fica sempre verde e o aviso de reposição nunca
+    dispara. Definir um a um, em mais de cem insumos, é o tipo de tarefa
+    que não acontece nunca.
+    """
+    if not itens:
+        raise ValueError("Nenhum mínimo preenchido para gravar.")
+
+    conn = get_connection()
+    try:
+        for item in itens:
+            minimo = float(item["estoque_minimo"])
+            if minimo < 0:
+                raise ValueError(
+                    f"O mínimo de '{item['insumo']}' não pode ser negativo."
+                )
+            cursor = conn.execute(
+                "UPDATE insumos SET estoque_minimo = ? WHERE nome = ?",
+                (minimo, item["insumo"]),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(itens)
 
 
 # ---------- O cálculo principal ----------
@@ -452,7 +801,7 @@ def remover_mapeamento_zig(sku: str):
 # ---------- Consultas do dashboard ----------
 
 def _data_inicio(dias: int) -> str:
-    return (datetime.date.today() - datetime.timedelta(days=dias - 1)).isoformat()
+    return (hoje() - datetime.timedelta(days=dias - 1)).isoformat()
 
 
 def consumo_por_insumo(dias: int = 30) -> list[dict]:
@@ -520,7 +869,7 @@ def dias_desde_ultima_contagem() -> int | None:
     if not linha or not linha["ultima"]:
         return None
     ultima = datetime.date.fromisoformat(linha["ultima"])
-    return (datetime.date.today() - ultima).days
+    return (hoje() - ultima).days
 
 
 def resumo_dashboard(dias: int = 30) -> dict:
@@ -777,3 +1126,148 @@ def insumos_sem_reconciliacao() -> list[str]:
     ).fetchall()
     conn.close()
     return [linha["nome"] for linha in linhas]
+
+
+# ---------- Saída de estoque por período ----------
+
+# Sem integração com o PDV, a venda é lançada à mão, dia a dia. Um dia
+# isolado não diz nada — o que responde "quanto saiu do estoque" é a soma
+# de vários dias, que é o número olhado na segunda-feira de manhã.
+#
+# O período é fechado nas duas pontas (>= início e <= fim), diferente do
+# resto do sistema, onde o fim é aberto. Aqui as duas datas são escolhidas
+# por quem olha, e um período que exclui o último dia escolhido seria uma
+# armadilha.
+
+def segunda_da_semana(data: datetime.date = None) -> datetime.date:
+    """A segunda-feira da semana de `data` (ou de hoje)."""
+    data = data or hoje()
+    return data - datetime.timedelta(days=data.weekday())
+
+
+def saida_por_periodo(inicio: str, fim: str) -> list[dict]:
+    """Quanto de cada insumo saiu do estoque entre duas datas, com o saldo atual.
+
+    A saída é o consumo teórico: vendas lançadas × ficha técnica. Vem
+    junto o estoque atual de cada insumo, porque as duas perguntas são
+    feitas ao mesmo tempo — quanto saiu e quanto ainda tem.
+    """
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo,
+               i.unidade_medida,
+               SUM(v.quantidade * ft.quantidade_por_prato) AS saida
+        FROM vendas_diarias v
+        JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+        JOIN insumos i ON i.id = ft.insumo_id
+        WHERE v.data >= ? AND v.data <= ?
+        GROUP BY i.id, i.nome, i.unidade_medida
+        ORDER BY saida DESC
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+
+    estoques = {e["insumo"]: e for e in calcular_estoque_todos_insumos()}
+    dias = _dias_entre(inicio, fim) + 1
+
+    resultado = []
+    for linha in linhas:
+        estoque = estoques.get(linha["insumo"], {})
+        resultado.append({
+            "insumo": linha["insumo"],
+            "unidade_medida": linha["unidade_medida"],
+            "saida": round(linha["saida"], 3),
+            "media_diaria": round(linha["saida"] / dias, 3),
+            "estoque_atual": estoque.get("estoque_atual"),
+            "estoque_minimo": estoque.get("estoque_minimo"),
+            "abaixo_do_minimo": estoque.get("abaixo_do_minimo", False),
+        })
+    return resultado
+
+
+def pratos_vendidos_no_periodo(inicio: str, fim: str) -> list[dict]:
+    """Quantos de cada prato foram vendidos no período."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT p.nome AS prato, SUM(v.quantidade) AS vendidos
+        FROM vendas_diarias v
+        JOIN pratos p ON p.id = v.prato_id
+        WHERE v.data >= ? AND v.data <= ?
+        GROUP BY p.id, p.nome
+        ORDER BY vendidos DESC
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def vendas_por_dia_no_periodo(inicio: str, fim: str) -> list[dict]:
+    """Total de pratos vendidos em cada dia do período, só dos dias lançados."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT data, SUM(quantidade) AS pratos_vendidos
+        FROM vendas_diarias
+        WHERE data >= ? AND data <= ?
+        GROUP BY data
+        ORDER BY data
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def dias_sem_lancamento(inicio: str, fim: str) -> list[str]:
+    """Dias do período que não têm nenhuma venda lançada.
+
+    Com lançamento manual, dia esquecido é a falha mais provável — e ela
+    não dá erro em lugar nenhum: o consumo simplesmente sai menor que o
+    real e o estoque teórico fica alto. Por isso os buracos são listados
+    junto com o resultado, em vez de ficarem invisíveis.
+
+    Um dia de folga do restaurante também cai aqui; a lista é um aviso
+    para conferir, não um erro.
+    """
+    lancados = {linha["data"] for linha in vendas_por_dia_no_periodo(inicio, fim)}
+    d1 = datetime.date.fromisoformat(inicio)
+    d2 = datetime.date.fromisoformat(fim)
+    faltando = []
+    while d1 <= d2:
+        if d1.isoformat() not in lancados:
+            faltando.append(d1.isoformat())
+        d1 += datetime.timedelta(days=1)
+    return faltando
+
+
+def resumo_do_periodo(inicio: str, fim: str) -> dict:
+    """Números do topo da tela de saída acumulada."""
+    conn = get_connection()
+    pratos_vendidos = conn.execute(
+        """SELECT COALESCE(SUM(quantidade), 0) AS n FROM vendas_diarias
+           WHERE data >= ? AND data <= ?""",
+        (inicio, fim),
+    ).fetchone()["n"]
+    compras_lancadas = conn.execute(
+        "SELECT COUNT(*) AS n FROM compras WHERE data >= ? AND data <= ?",
+        (inicio, fim),
+    ).fetchone()["n"]
+    conn.close()
+
+    saidas = saida_por_periodo(inicio, fim)
+    buracos = dias_sem_lancamento(inicio, fim)
+    total_dias = _dias_entre(inicio, fim) + 1
+
+    return {
+        "dias": total_dias,
+        "dias_lancados": total_dias - len(buracos),
+        "dias_sem_lancamento": buracos,
+        "pratos_vendidos": pratos_vendidos,
+        "compras_lancadas": compras_lancadas,
+        "insumos_movimentados": len(saidas),
+        "insumos_abaixo_do_minimo": sum(1 for s in saidas if s["abaixo_do_minimo"]),
+    }
