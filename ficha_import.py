@@ -305,6 +305,17 @@ NOMES_CANONICOS = {
     "molho roti": "Molho roti",
 }
 
+# Quantidade da planilha que está errada e que a cozinha confirmou qual é
+# a certa. Chave: (prato, insumo), comparados por `chave()`. Valor: quanto
+# 1 porção consome, na unidade do insumo. A planilha continua sendo a fonte
+# da verdade para todo o resto; isto só impede que reimportar desfaça uma
+# correção já confirmada.
+QUANTIDADES_CORRIGIDAS = {
+    # A planilha diz 1 (uma unidade, ao que parece), lido como 1 kg. O
+    # usuário confirmou em 23/09/2026: a porção leva 300 g de croqueta.
+    ("croqueta de costela", "croqueta de costela"): 0.3,
+}
+
 # Insumo que se conta por unidade, não por peso. Todo o resto é kg, menos
 # o que estiver em EM_LITRO.
 EM_UNIDADE = {"Ovo", "Café", "Pão de hambúrguer", "Linguiça provolone"}
@@ -521,10 +532,18 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
 
             for insumo, quantidade in consumo.items():
                 insumos[insumo] = unidade_do_insumo(insumo)
+                por_porcao = round(quantidade / porcoes, 6)
+                corrigida = QUANTIDADES_CORRIGIDAS.get((chave(prato), chave(insumo)))
+                if corrigida is not None and corrigida != por_porcao:
+                    avisos.append(
+                        f"'{prato}' consome {por_porcao:g} de '{insumo}' na planilha; "
+                        f"usei {corrigida:g}, a quantidade confirmada pela cozinha."
+                    )
+                    por_porcao = corrigida
                 fichas.append({
                     "prato": prato,
                     "insumo": insumo,
-                    "quantidade": round(quantidade / porcoes, 6),
+                    "quantidade": por_porcao,
                     "aba": receita["aba"],
                 })
 

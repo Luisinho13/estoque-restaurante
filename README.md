@@ -373,6 +373,15 @@ preenchida, as outras contam como zero e a tela lista quais são. Gravar
 só a alcatra em peça como estoque total da alcatra seria uma contagem
 pela metade, com cara de contagem inteira.
 
+A conversão ainda expôs um erro antigo. Com o pacote de croqueta
+pesando 300 g, a ficha técnica dizia que cada porção vendida consumia
+1 kg. A planilha da cozinha escreve "1", querendo dizer uma unidade, e o
+importador lê toda quantidade em kg, porque é assim que o resto da
+planilha está escrito. Nenhuma tela reclamaria: o estoque de croqueta
+só cairia três vezes mais rápido que o real, e a perda apareceria
+negativa na reconciliação. Pôr lado a lado o peso de quem conta e o
+consumo de quem cozinha foi o que mostrou.
+
 Uma terceira quase passou. Cachaça 51 e conhaque Domec aparecem na
 planilha como bebida do bar, mas a ficha técnica usa os dois como
 ingrediente. Cadastrados como bebida, virariam insumos que ninguém
@@ -681,9 +690,22 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   preenchem os fatores que faltam. Reimportar atualiza em vez de duplicar
   e não apaga fator já preenchido
 - **Bebidas entram no estoque.** Primeira carga: 576 linhas de alimentos
-  e bebidas, 383 insumos novos (237 bebidas, cada uma com o nome limpo
-  da descrição) e 41 linhas com fator a definir. Limpeza, descartáveis,
-  escritório e utensílios ficaram de fora
+  e bebidas e 383 insumos novos (237 bebidas, cada uma com o nome limpo
+  da descrição). Limpeza, descartáveis, escritório e utensílios ficaram
+  de fora
+- **Todas as linhas com conversão.** 41 linhas não diziam o peso (maço,
+  unidade, bandeja, pacote). Em vez de um peso médio chutado, cada uma
+  ficou a definir até a cozinha informar: maço de erva 200 g, alface
+  100 g, bandeja de morango 500 g, pacote de isca de frango 300 g, e
+  assim por diante. Algumas linhas passaram a ser contadas como a equipe
+  conta de verdade, e não como a planilha dizia (morango em bandeja, não
+  em caixa; isca de frango em pacote, não em unidade)
+- **Corrigido: cada porção de croqueta tirava 1 kg do estoque.** A
+  planilha de ficha técnica escreve "1" para a croqueta do prato, e o
+  importador lê tudo em kg. O erro só apareceu quando a contagem mostrou
+  que o pacote inteiro pesa 300 g. A quantidade certa (300 g) está
+  gravada no importador, para que reimportar a planilha não traga o
+  erro de volta
 - **Lembrete de dia sem venda lançada**, na barra lateral e na tela de
   venda, a partir do dia seguinte e só depois do início do uso. Dia em
   que o restaurante não abriu é marcado como fechado e sai do lembrete
