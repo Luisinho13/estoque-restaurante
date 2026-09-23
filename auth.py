@@ -31,6 +31,7 @@ AREAS = {
     "pratos": "Pratos",
     "ficha": "Ficha Técnica",
     "ficha_import": "Importar Ficha Técnica",
+    "itens_contagem": "Itens da Contagem",
     "compra": "Lançar Compra",
     "nfe": "Importar Nota Fiscal",
     "nf_manual": "Lançar Nota Fiscal (manual)",

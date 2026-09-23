@@ -13,6 +13,7 @@ import streamlit as st
 
 import database
 import auth
+import contagem_import
 import crud
 import exemplos
 import ficha_import
@@ -476,7 +477,7 @@ def unidades_dos_insumos():
 
 
 def _tabela_em_lote(linhas, coluna_item, coluna_valor, rotulo_valor, chave,
-                    formato, busca_rotulo, passo=0.5):
+                    formato, busca_rotulo, passo=0.5, grupo=""):
     """Tabela editável com filtro, para preencher muitos itens de uma vez.
 
     Devolve `{nome do item: valor}` só com o que foi realmente digitado.
@@ -497,6 +498,12 @@ def _tabela_em_lote(linhas, coluna_item, coluna_valor, rotulo_valor, chave,
 
     A chave deve incluir a data quando a tela tem uma, para que trocar de
     dia não carregue os números do dia anterior.
+
+    `grupo` serve quando a tela mostra só parte dos itens de cada vez (uma
+    seção da planilha de contagem): ele entra na chave do widget pelo mesmo
+    motivo do filtro, enquanto os valores continuam num dicionário só.
+    Quem chama pode pré-carregar `st.session_state[f"{chave}_valores"]` com
+    todos os itens, já que `linhas` traz só o grupo visível.
     """
     chave_valores = f"{chave}_valores"
     if chave_valores not in st.session_state:
@@ -542,7 +549,7 @@ def _tabela_em_lote(linhas, coluna_item, coluna_valor, rotulo_valor, chave,
         hide_index=True,
         height=min(620, 60 + 35 * len(exibidas)),
         # A chave muda com o filtro de propósito: ver o docstring.
-        key=f"{chave}_editor_{termo}",
+        key=f"{chave}_editor_{grupo}_{termo}",
         disabled=[c for c in exibidas[0] if c != coluna_valor],
         column_config={
             coluna_valor: st.column_config.NumberColumn(
@@ -1896,6 +1903,28 @@ def _venda_um_prato(pratos, data_iso):
             _ficha_do_prato(prato, total)
 
 
+def _dia_fechado(data_iso):
+    """Folga não é esquecimento: marcar o dia tira ele do lembrete."""
+    if data_iso >= crud.hoje().isoformat():
+        return
+    if data_iso in crud.dias_sem_movimento(data_iso, data_iso):
+        st.info(
+            f"{_data_br(data_iso)} está marcado como **dia em que o restaurante "
+            "não abriu**, por isso não aparece no lembrete de venda pendente.",
+            icon=":material/door_front:",
+        )
+        if st.button("Desfazer: o restaurante abriu", key="venda_desmarcar_fechado"):
+            crud.desmarcar_dia_sem_movimento(data_iso)
+            st.rerun()
+    elif st.button(
+        "🚪 O restaurante não abriu neste dia", key="venda_marcar_fechado",
+        help="Tira o dia do lembrete de venda pendente. Use só para folga ou "
+             "fechamento, não para dia que ainda falta lançar.",
+    ):
+        crud.marcar_dia_sem_movimento(data_iso)
+        st.rerun()
+
+
 def pagina_venda():
     st.title("💰 Lançar Venda do Dia")
     st.caption(
@@ -1907,6 +1936,16 @@ def pagina_venda():
     if not pratos:
         st.info("Cadastre um prato antes de lançar vendas.")
         return
+
+    pendentes = crud.vendas_pendentes()
+    if pendentes:
+        st.warning(
+            f"**{len(pendentes)} dia(s) sem venda lançada:** "
+            + ", ".join(_data_br(d) for d in pendentes)
+            + ". Escolha a data abaixo para lançar. Se o restaurante não abriu, "
+            "marque o dia como fechado no fim da página.",
+            icon=":material/event_busy:",
+        )
 
     data = st.date_input("Data da venda", value=crud.hoje(), key="venda_data")
     data_iso = str(data)
@@ -1922,6 +1961,7 @@ def pagina_venda():
     do_dia = crud.vendas_do_dia(data_iso)
     if not do_dia:
         st.caption("Nenhuma venda lançada neste dia ainda.")
+        _dia_fechado(data_iso)
     else:
         df = pd.DataFrame(do_dia).rename(
             columns={"prato": "Prato", "quantidade": "Qtd."}
@@ -2142,11 +2182,231 @@ def pagina_zig():
 
 # ---------- Contagem Física Mensal ----------
 
-def pagina_contagem():
-    st.title("✅ Contagem Física Mensal")
+# ---------- Itens da Contagem ----------
+
+def _editor_de_fatores(itens):
+    """Onde se diz quanto vale cada unidade contada, em lote."""
+    pendentes = [i for i in itens if i["fator_conversao"] is None]
+    if pendentes:
+        st.warning(
+            f"**{len(pendentes)} linha(s) sem fator.** A planilha não diz o peso "
+            "delas (um maço, uma unidade, uma caixa) e o insumo é controlado em "
+            "outra unidade. Enquanto o fator estiver em branco, contar essa "
+            "linha trava a gravação do insumo dela.",
+            icon=":material/pending:",
+        )
+    else:
+        st.success("Todas as linhas têm fator de conversão.", icon=":material/task_alt:")
+
+    so_pendentes = st.toggle(
+        "Mostrar só as linhas sem fator", value=bool(pendentes), key="fatores_so_pendentes"
+    )
+    mostrar = pendentes if so_pendentes else itens
+    if not mostrar:
+        return
+
+    versao = st.session_state.get("fatores_versao", 0)
+    linhas = [
+        {
+            "Item": i["descricao"],
+            "Seção": i["secao"],
+            "Conta em": i["unidade_contagem"],
+            "Insumo": f"{i['insumo']} ({i['unidade_insumo']})",
+            "Fator": i["fator_conversao"],
+        }
+        for i in mostrar
+    ]
     st.caption(
-        "A contagem do mês inteiro numa tabela só. Ela vira a nova base do "
-        "cálculo automático — a partir dela, estoque é compra menos consumo."
+        "**Fator** = quanto 1 unidade contada vale na unidade do insumo. "
+        "Ex.: 1 maço de alecrim = 0,05 kg → fator 0,05."
+    )
+    valores = _tabela_em_lote(
+        linhas, "Item", "Fator", "Fator", f"fatores_{versao}",
+        "%.4f", "Filtrar item", passo=0.01, grupo=str(so_pendentes),
+    )
+
+    atuais = {i["descricao"]: i["fator_conversao"] for i in itens}
+    ids = {i["descricao"]: i["id"] for i in itens}
+    mudados = {ids[n]: v for n, v in valores.items() if n in ids and v != atuais.get(n)}
+    if not mudados:
+        return
+    st.write(f"**{len(mudados)} fator(es) alterado(s).**")
+    if st.button("💾 Gravar fatores", type="primary", key="fatores_gravar"):
+        try:
+            total = crud.atualizar_fatores_da_contagem(mudados)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        st.session_state["fatores_versao"] = versao + 1
+        st.success(f"{total} fator(es) gravado(s).", icon=":material/check_circle:")
+        st.rerun()
+
+
+def _importar_planilha_de_contagem():
+    arquivo = st.file_uploader(
+        "Planilha de contagem (.xlsx, aba COMPRAS)", type=["xlsx"], key="contagem_planilha"
+    )
+    if not arquivo:
+        return
+    try:
+        linhas = contagem_import.ler_planilha(arquivo)
+        plano = contagem_import.montar_plano(linhas)
+    except Exception as e:
+        st.error(f"Não consegui ler a planilha: {e}")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Linhas de alimentos e bebidas", len(plano["itens"]))
+    col2.metric("Insumos novos", len(plano["insumos_novos"]))
+    col3.metric("Fator a definir", len(plano["a_definir"]))
+    st.caption(
+        "Limpeza, descartáveis, escritório e utensílios ficam de fora. "
+        "Linha repetida em duas seções entra uma vez só."
+    )
+
+    if plano["problemas"]:
+        st.error("A importação está bloqueada até resolver:\n\n- " + "\n- ".join(plano["problemas"]))
+        return
+    if plano["insumos_novos"]:
+        with st.expander(f"Insumos que serão criados ({len(plano['insumos_novos'])})"):
+            st.write(", ".join(
+                f"{nome} ({unidade})" for nome, unidade in sorted(plano["insumos_novos"].items())
+            ))
+    with st.expander("Como cada linha vai ficar"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Seção": i["secao"], "Item": i["descricao"], "Conta em": i["unidade_contagem"],
+                    "Insumo": i["insumo"], "Un. insumo": i["unidade_insumo"], "Fator": i["fator"],
+                }
+                for i in plano["itens"]
+            ]),
+            width="stretch", hide_index=True,
+        )
+
+    if st.button("📥 Importar planilha", type="primary", key="contagem_importar"):
+        try:
+            resultado = contagem_import.aplicar_plano(plano)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        st.success(
+            f"{resultado['insumos_criados']} insumo(s) criado(s), "
+            f"{resultado['itens_criados']} linha(s) nova(s) e "
+            f"{resultado['itens_atualizados']} atualizada(s).",
+            icon=":material/check_circle:",
+        )
+
+
+def pagina_itens_contagem():
+    st.title("📋 Itens da Contagem")
+    st.caption(
+        "As linhas da planilha de estoque que a tela de Contagem Física "
+        "mostra, e a conversão de cada uma para o insumo."
+    )
+    itens = crud.itens_da_contagem()
+
+    aba_fatores, aba_importar = st.tabs(["Fatores de conversão", "Importar planilha"])
+    with aba_fatores:
+        if itens:
+            _editor_de_fatores(itens)
+        else:
+            st.info(
+                "Nenhuma planilha de contagem importada ainda. Sem ela, a "
+                "Contagem Física lista os insumos direto, cada um na sua unidade."
+            )
+    with aba_importar:
+        st.caption(
+            "Importar de novo a mesma planilha atualiza as linhas em vez de "
+            "duplicar, e não apaga fator que já foi preenchido aqui."
+        )
+        _importar_planilha_de_contagem()
+
+
+# ---------- Contagem Física ----------
+
+TODAS_AS_SECOES = "Todas as seções"
+FORA_DA_PLANILHA = "Fora da planilha"
+
+
+def _linhas_da_contagem(data_iso, insumos, unidades):
+    """As linhas da tela de contagem: as da planilha e, no fim, os insumos
+    que não estão nela, contados direto na unidade do insumo.
+
+    Devolve também `alvo`, que diz para cada linha da tabela se ela é um
+    item da planilha (e qual) ou um insumo contado direto.
+    """
+    itens = crud.itens_da_contagem()
+    ja_por_item = crud.contagem_por_item_do_dia(data_iso)
+    ja_por_insumo = crud.contagens_do_dia(data_iso)
+
+    linhas, alvo = [], {}
+    for item in itens:
+        fator = item["fator_conversao"]
+        if fator is None:
+            destino = f"{item['insumo']} · ⚠️ fator a definir"
+        elif fator == 1 and item["unidade_contagem"] == item["unidade_insumo"]:
+            destino = item["insumo"]
+        else:
+            destino = f"{item['insumo']} · 1 = {fator:g} {item['unidade_insumo']}"
+        linhas.append({
+            "Seção": item["secao"],
+            "Item": item["descricao"],
+            "Un.": item["unidade_contagem"],
+            "Contagem": ja_por_item.get(item["id"]),
+            "Vai para": destino,
+        })
+        alvo[item["descricao"]] = ("item", item["id"])
+
+    na_planilha = {item["insumo"] for item in itens}
+    for nome in insumos:
+        if nome in na_planilha:
+            continue
+        rotulo = nome if nome not in alvo else f"{nome} (insumo)"
+        linhas.append({
+            "Seção": FORA_DA_PLANILHA,
+            "Item": rotulo,
+            "Un.": unidades.get(nome, ""),
+            "Contagem": ja_por_insumo.get(nome),
+            "Vai para": nome,
+        })
+        alvo[rotulo] = ("insumo", nome)
+    return itens, linhas, alvo
+
+
+def _avisos_da_contagem(resumo):
+    """O que a conversão encontrou e quem conta precisa saber antes de gravar."""
+    if resumo["sem_fator"]:
+        detalhe = "; ".join(
+            f"**{insumo}** ({', '.join(linhas)})"
+            for insumo, linhas in sorted(resumo["sem_fator"].items())
+        )
+        st.error(
+            f"{len(resumo['sem_fator'])} insumo(s) **não serão gravados** porque uma "
+            f"linha preenchida ainda não tem fator de conversão: {detalhe}. "
+            "Defina o fator em *Itens da Contagem* e grave de novo — o que "
+            "foi digitado continua aqui.",
+            icon=":material/block:",
+        )
+    if resumo["em_branco"]:
+        with st.expander(
+            f"⚠️ {len(resumo['em_branco'])} insumo(s) com linha em branco, que conta como zero"
+        ):
+            st.caption(
+                "Estes insumos têm mais de uma linha na planilha e só parte delas "
+                "foi preenchida. As linhas em branco entram como **zero** no total "
+                "do insumo. Se ainda não contou, preencha antes de gravar."
+            )
+            for insumo, linhas in sorted(resumo["em_branco"].items()):
+                st.write(f"**{insumo}**: " + ", ".join(linhas))
+
+
+def pagina_contagem():
+    st.title("✅ Contagem Física")
+    st.caption(
+        "A contagem na ordem da planilha de estoque, na unidade de cada "
+        "prateleira. O sistema converte cada linha para o insumo e a "
+        "contagem vira a nova base do cálculo automático."
     )
 
     insumos = listar_insumos()
@@ -2169,51 +2429,98 @@ def pagina_contagem():
 
     unidades = unidades_dos_insumos()
     teoricos = {e["insumo"]: e["estoque_atual"] for e in crud.calcular_estoque_todos_insumos()}
-    ja_contados = crud.contagens_do_dia(data_iso)
+    itens, linhas, alvo = _linhas_da_contagem(data_iso, insumos, unidades)
 
-    if ja_contados:
+    # A data entra na chave: trocar de dia não pode carregar os números
+    # que já tinham sido digitados para o dia anterior. Os valores são
+    # carregados aqui, de todas as seções, porque a tabela mostra uma
+    # seção por vez e só conhece as linhas visíveis.
+    chave = f"contagem_{data_iso}"
+    if f"{chave}_valores" not in st.session_state:
+        st.session_state[f"{chave}_valores"] = {
+            l["Item"]: float(l["Contagem"]) for l in linhas if l["Contagem"] is not None
+        }
+        if st.session_state[f"{chave}_valores"]:
+            st.session_state[f"{chave}_ja_gravado"] = True
+    if st.session_state.get(f"{chave}_ja_gravado"):
         st.info(
-            f"{len(ja_contados)} insumo(s) já contado(s) em {_data_br(data_iso)}. "
-            "Os valores vêm preenchidos abaixo; gravar de novo corrige, não duplica.",
+            f"Já existe contagem gravada em {_data_br(data_iso)}. Os valores vêm "
+            "preenchidos abaixo; gravar de novo corrige, não duplica.",
             icon=":material/history:",
         )
 
-    linhas = [
-        {
-            "Insumo": nome,
-            "Un.": unidades.get(nome, ""),
-            "Teórico": teoricos.get(nome),
-            "Contagem": ja_contados.get(nome),
-        }
-        for nome in insumos
-    ]
+    st.write("**Preencha o que foi contado, na unidade da linha. Deixe em branco o que não contou.**")
+    secoes = list(dict.fromkeys(l["Seção"] for l in linhas))
+    secao = TODAS_AS_SECOES
+    if len(secoes) > 1:
+        secao = st.selectbox(
+            "Seção da planilha",
+            [TODAS_AS_SECOES] + secoes,
+            format_func=lambda s: s if s == TODAS_AS_SECOES
+            else f"{s} · {sum(1 for l in linhas if l['Seção'] == s)} itens",
+            key="contagem_secao",
+            help="A mesma ordem da planilha de papel: conte uma seção, passe para a próxima. "
+                 "O que foi digitado nas outras seções fica guardado.",
+        )
+    if secao == TODAS_AS_SECOES:
+        visiveis = linhas
+    else:
+        visiveis = [{k: v for k, v in l.items() if k != "Seção"}
+                    for l in linhas if l["Seção"] == secao]
 
-    st.write("**Preencha o que foi contado. Deixe em branco o que não contou.**")
-    # A data entra na chave: trocar de dia não pode carregar os números
-    # que já tinham sido digitados para o dia anterior.
     valores = _tabela_em_lote(
-        linhas, "Insumo", "Contagem", "Contagem", f"contagem_{data_iso}",
-        "%.3f", "Filtrar insumo",
+        visiveis, "Item", "Contagem", "Contagem", chave,
+        "%.3f", "Filtrar item", grupo=secao,
     )
 
-    itens = _como_itens(valores, "insumo", "quantidade")
-    if not itens:
+    # Um nome que não está mais em `alvo` sobrou de uma versão anterior
+    # da lista (item renomeado ou apagado) e não tem para onde ir.
+    por_item = {alvo[n][1]: v for n, v in valores.items() if alvo.get(n, ("",))[0] == "item"}
+    por_insumo = {alvo[n][1]: v for n, v in valores.items() if alvo.get(n, ("",))[0] == "insumo"}
+    if not por_item and not por_insumo:
         st.caption("Nenhuma contagem preenchida ainda.")
         return
 
-    st.write(f"**{len(itens)} insumo(s) preenchido(s)** de {len(insumos)}.")
+    try:
+        resumo = crud.resumo_da_contagem(por_item, por_insumo, itens)
+    except ValueError as e:
+        st.error(str(e))
+        return
 
-    if st.button("💾 Gravar contagem", type="primary"):
+    st.write(
+        f"**{len(por_item) + len(por_insumo)} linha(s) preenchida(s)** de {len(linhas)} · "
+        f"{len(resumo['totais'])} insumo(s) prontos para gravar."
+    )
+    _avisos_da_contagem(resumo)
+
+    with st.expander(f"Ver o total de cada insumo ({len(resumo['totais'])})"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Insumo": nome,
+                    "Contado": total,
+                    "Un.": unidades.get(nome, ""),
+                    "Teórico": teoricos.get(nome),
+                    "De onde veio": "; ".join(resumo["composicao"][nome]) or "direto",
+                }
+                for nome, total in sorted(resumo["totais"].items())
+            ]),
+            width="stretch", hide_index=True,
+            column_config={"Contado": st.column_config.NumberColumn(format="%.3f")},
+        )
+
+    if st.button("💾 Gravar contagem", type="primary", disabled=not resumo["totais"]):
         try:
-            total = crud.registrar_contagens_em_lote(
-                itens, data_iso, observacao.strip() or None
+            resumo = crud.registrar_contagem_pela_planilha(
+                por_item, por_insumo, data_iso, observacao.strip() or None
             )
         except Exception as e:
             st.error(f"Nada foi gravado: {e}")
             return
 
+        st.session_state[f"{chave}_ja_gravado"] = True
         st.success(
-            f"{total} contagem(ns) gravada(s) em {_data_br(data_iso)}. "
+            f"{len(resumo['totais'])} insumo(s) gravado(s) em {_data_br(data_iso)}. "
             "Esta é a nova base do cálculo.",
             icon=":material/check_circle:",
         )
@@ -2221,7 +2528,7 @@ def pagina_contagem():
         # A diferença entre o que o sistema calculava e o que foi contado é
         # a informação que a contagem existe para produzir. Mostrar na hora
         # evita que ela só apareça na tela de perdas, um mês depois.
-        gravados = {i["insumo"]: i["quantidade"] for i in itens}
+        gravados = resumo["totais"]
         diferencas = []
         for nome, contado in gravados.items():
             teorico = teoricos.get(nome)
@@ -2466,6 +2773,10 @@ PG_PERDAS = st.Page(
     pagina_perdas, title="Perdas e Reconciliação", icon=":material/scale:",
     url_path="perdas",
 )
+PG_ITENS_CONTAGEM = st.Page(
+    pagina_itens_contagem, title="Itens da Contagem", icon=":material/checklist:",
+    url_path="itens-contagem",
+)
 PG_CONTAGEM = st.Page(
     pagina_contagem, title="Contagem Física", icon=":material/fact_check:", url_path="contagem"
 )
@@ -2493,6 +2804,7 @@ PAGINAS_POR_AREA = {
     "pratos": PG_PRATOS,
     "ficha": PG_FICHA,
     "ficha_import": PG_FICHA_IMPORT,
+    "itens_contagem": PG_ITENS_CONTAGEM,
     "compra": PG_COMPRA,
     "nfe": PG_NFE,
     "nf_manual": PG_NF_MANUAL,
@@ -2510,8 +2822,9 @@ def _liberadas(*areas):
 menu = {}
 if _liberadas("dashboard", "painel", "saida", "perdas"):
     menu["Visão geral"] = _liberadas("dashboard", "painel", "saida", "perdas")
-if _liberadas("insumos", "pratos", "ficha", "ficha_import"):
-    menu["Cadastros"] = _liberadas("insumos", "pratos", "ficha", "ficha_import")
+CADASTROS = ("insumos", "pratos", "ficha", "ficha_import", "itens_contagem")
+if _liberadas(*CADASTROS):
+    menu["Cadastros"] = _liberadas(*CADASTROS)
 if _liberadas("compra", "nf_manual", "nfe", "zig", "venda", "contagem"):
     menu["Lançamentos"] = _liberadas(
         "compra", "nf_manual", "nfe", "zig", "venda", "contagem"
@@ -2561,6 +2874,16 @@ with st.sidebar:
         alertas = crud.resumo_dashboard(30)["abaixo_do_minimo"]
         if alertas:
             st.error(f"⚠️ {alertas} insumo(s) abaixo do mínimo")
+    # Com lançamento manual, o dia esquecido é a falha mais provável e a
+    # única que não dá erro. O lembrete fica aqui, visível em qualquer tela,
+    # para o buraco aparecer no dia seguinte e não na conferência da semana.
+    if "venda" in MINHAS_AREAS:
+        pendentes = crud.vendas_pendentes()
+        if pendentes:
+            dias = ", ".join(_data_br(d)[:5] for d in pendentes[-5:])
+            antes = f"{len(pendentes) - 5} dia(s) antes e " if len(pendentes) > 5 else ""
+            st.warning(f"📅 Venda não lançada: {antes}{dias}")
+            st.page_link(PG_VENDA, label="Lançar agora", icon=":material/point_of_sale:")
     st.caption(f"Hoje: {crud.hoje().strftime('%d/%m/%Y')}")
 
 if st.session_state.pop("_sem_areas", False):

@@ -6,8 +6,9 @@ toda segunda-feira e vira uma conferência mensal.
 
 Projeto pessoal, criado para um problema real do restaurante onde
 trabalho como comprador. **Entra em uso de verdade em setembro de 2026**,
-com 128 insumos, 87 pratos e 546 linhas de ficha técnica vindas das
-planilhas da cozinha.
+com 511 insumos entre cozinha e bebidas, 87 pratos, 546 linhas de ficha
+técnica vindas das planilhas da cozinha e 576 linhas de contagem vindas
+da planilha de estoque.
 
 **▶️ Demonstração, sem cadastro:**
 https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
@@ -128,6 +129,10 @@ não olhar.
   Em branco não mexe no prato; zero apaga o lançamento dele no dia. É a
   tela do dia a dia — prato a prato seriam dezenas de envios por noite, e
   o que não cabe na rotina acaba não sendo lançado
+- **Lembrete de dia sem venda lançada**, na barra lateral de qualquer tela,
+  a partir do dia seguinte. O dia em que o restaurante não abriu é marcado
+  como fechado e sai do lembrete — senão uma folga acusaria falta para
+  sempre, e aviso que nunca some é aviso que ninguém lê
 - Lançamento avulso por prato, para corrigir ou completar um só. O padrão
   é **substituir** o total do dia, não somar: relançar o mesmo prato
   corrige o dia em vez de duplicá-lo, e clicar duas vezes no botão dá o
@@ -147,11 +152,17 @@ não olhar.
 - **"O que acaba primeiro"**: estimativa de em quantos dias cada insumo
   acaba (estoque ÷ consumo médio diário), com semáforo de status. É a
   tela que responde o que precisa ser comprado antes de faltar
-- **Contagem física mensal numa tabela só**, com o estoque teórico ao lado
-  de cada insumo e filtro por nome. Ao gravar, a tela mostra na hora quais
-  insumos divergiram do calculado e em quanto — a informação que a contagem
-  existe para produzir, sem esperar um mês pela tela de perdas. Regravar
-  corrige o dia em vez de empilhar contagens
+- **Contagem física pela planilha do restaurante**: a tela segue a mesma
+  planilha que a equipe já usava, seção por seção e na unidade de cada
+  prateleira — parmesão em peça, alecrim em maço, cerveja em garrafa. Cada
+  linha tem um fator que a converte para o insumo (1 peça = 7,5 kg), e
+  várias linhas somam no mesmo insumo (alcatra em peça, porcionada na
+  câmara e porcionada na cozinha). Antes de gravar, a tela mostra o total
+  de cada insumo ao lado do estoque teórico; ao gravar, quais divergiram e
+  em quanto. Regravar corrige o dia em vez de empilhar contagens
+- **Itens da Contagem**: importa a planilha de contagem (só alimentos e
+  bebidas — limpeza, descartáveis, escritório e utensílios ficam de fora)
+  e é onde se preenche o fator das linhas cujo peso a planilha não diz
 - **Estoque mínimo em lote**, na tela de Insumos: é o mínimo que liga o
   semáforo do painel e o alerta de reposição. Definido um a um, em mais de
   cem insumos, não é definido nunca — e sem ele o sistema só conta o
@@ -344,6 +355,29 @@ explosão da subreceita divide pelo rendimento, esse campo multiplicaria
 o consumo por cinquenta. Quando o rendimento declarado é menor que 60%
 da soma dos ingredientes, vale a soma — e o caso aparece na prévia para
 ser corrigido na planilha.
+
+**A planilha de contagem conta em peça, a ficha técnica desconta em
+quilo.** A contagem semanal do restaurante é feita numa planilha com
+quase mil linhas, na unidade em que cada coisa está na prateleira: o
+parmesão em peça de 7,5 kg, o alecrim em maço, o leite em caixinha. A
+ficha técnica, que é de onde sai o consumo, trabalha em kg e litro. Pedir
+para quem conta converter de cabeça seria trazer o erro para dentro do
+número que serve de base para todo o resto. Cada linha da planilha
+ganhou um fator de conversão, e o insumo recebe a soma das suas linhas.
+
+Duas armadilhas vieram junto. Quando a descrição não diz o peso (uma
+"unidade" de alface, um "maço" de salsinha), o fator fica **a definir**
+em vez de chutado: um peso médio inventado entraria calado em toda
+contagem. E quando um insumo tem várias linhas e só parte delas é
+preenchida, as outras contam como zero e a tela lista quais são. Gravar
+só a alcatra em peça como estoque total da alcatra seria uma contagem
+pela metade, com cara de contagem inteira.
+
+Uma terceira quase passou. Cachaça 51 e conhaque Domec aparecem na
+planilha como bebida do bar, mas a ficha técnica usa os dois como
+ingrediente. Cadastrados como bebida, virariam insumos que ninguém
+consome, e os da ficha, insumos que ninguém conta. As duas linhas caem
+nos insumos da cozinha, convertidas de garrafa para litro.
 
 **Um mapeamento errado era definitivo.** A tela de importação mostrava
 apenas os produtos ainda não mapeados. Quem ligasse um produto ao prato
@@ -619,6 +653,7 @@ estoque-restaurante/
 ├── database.py       # esquema e conexão (SQLite ou PostgreSQL)
 ├── auth.py           # login, aprovação de cadastros e permissões
 ├── ficha_import.py   # leitura das planilhas de ficha técnica → cadastros
+├── contagem_import.py # leitura da planilha de contagem → itens da contagem
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
@@ -632,6 +667,30 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.10 — A contagem da planilha
+
+- **Contagem física pela planilha do restaurante.** A tela passou a
+  seguir a planilha de contagem que a equipe já usava: mesmas seções,
+  mesma ordem, cada linha na unidade da prateleira. O sistema converte
+  cada linha para o insumo com um fator (1 peça de parmesão = 7,5 kg) e
+  soma as linhas de um mesmo insumo. Linha preenchida sem fator trava só
+  o insumo dela, e linha irmã em branco conta como zero, com aviso antes
+  de gravar
+- **Itens da Contagem**, em Cadastros: importa a planilha e é onde se
+  preenchem os fatores que faltam. Reimportar atualiza em vez de duplicar
+  e não apaga fator já preenchido
+- **Bebidas entram no estoque.** Primeira carga: 576 linhas de alimentos
+  e bebidas, 383 insumos novos (237 bebidas, cada uma com o nome limpo
+  da descrição) e 41 linhas com fator a definir. Limpeza, descartáveis,
+  escritório e utensílios ficaram de fora
+- **Lembrete de dia sem venda lançada**, na barra lateral e na tela de
+  venda, a partir do dia seguinte e só depois do início do uso. Dia em
+  que o restaurante não abriu é marcado como fechado e sai do lembrete
+  (e também da lista de dias sem venda da tela de Saída)
+- Excluir um insumo passa a levar junto as linhas de contagem e os
+  mapeamentos de nota fiscal ligados a ele — antes, um mapeamento de NF-e
+  impedia a exclusão no Postgres
 
 ### v0.9.1 — O banco que dormia
 
@@ -810,8 +869,8 @@ feito vira um número errado com cara de certo.
 
 ## Próximos passos
 
-- Lembrete de dia sem venda lançada, para o buraco aparecer no mesmo dia
-  em vez de só na conferência da semana
+- Venda de bebida descontando do estoque: hoje as bebidas se movem só
+  pela contagem e pelas compras, porque não há prato ligado a elas
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
 - Sugestão de compra a partir dos dias de estoque restantes

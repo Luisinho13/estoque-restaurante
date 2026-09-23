@@ -24,6 +24,10 @@ Estrutura:
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
 - usuarios: quem pode entrar no sistema (senha guardada como hash, nunca em texto)
 - permissoes: quais áreas do app cada usuário pode abrir
+- dias_sem_movimento: dias em que o restaurante não abriu (não é esquecimento)
+- itens_contagem: as linhas da planilha de contagem, cada uma ligada a um
+  insumo com o fator que converte a unidade contada na do insumo
+- contagens_itens: o que foi contado em cada linha, antes de converter
 """
 
 import os
@@ -441,6 +445,29 @@ ESQUEMA = """
             insumo_id INTEGER NOT NULL REFERENCES insumos(id),
             fator_conversao REAL NOT NULL DEFAULT 1,  -- ex: nota vem em "cx" mas insumo é em "kg"
             UNIQUE(fornecedor_cnpj, codigo_produto)
+        );
+
+        CREATE TABLE IF NOT EXISTS dias_sem_movimento (
+            data TEXT PRIMARY KEY,       -- YYYY-MM-DD em que o restaurante não abriu
+            marcado_em TEXT              -- quando alguém marcou, só para conferência
+        );
+
+        CREATE TABLE IF NOT EXISTS itens_contagem (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL UNIQUE,    -- a linha como está escrita na planilha de contagem
+            secao TEXT NOT NULL,               -- o bloco da planilha (DESTILADOS, HORTIFRUITI...)
+            ordem INTEGER NOT NULL,            -- posição na planilha, para contar na mesma ordem
+            unidade_contagem TEXT NOT NULL,    -- como se conta a linha: peça, pacote, garrafa, kg
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+            fator_conversao REAL               -- 1 unidade contada = fator × unidade do insumo, NULL = a definir
+        );
+
+        CREATE TABLE IF NOT EXISTS contagens_itens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL REFERENCES itens_contagem(id),
+            data TEXT NOT NULL,                -- formato YYYY-MM-DD
+            quantidade REAL NOT NULL,          -- na unidade da contagem, antes de converter
+            UNIQUE(item_id, data)
         );
 """
 

@@ -93,6 +93,13 @@ def excluir_insumo(nome: str):
     conn.execute("DELETE FROM ficha_tecnica WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM compras WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM contagens_fisicas WHERE insumo_id = ?", (insumo_id,))
+    conn.execute(
+        """DELETE FROM contagens_itens WHERE item_id IN
+               (SELECT id FROM itens_contagem WHERE insumo_id = ?)""",
+        (insumo_id,),
+    )
+    conn.execute("DELETE FROM itens_contagem WHERE insumo_id = ?", (insumo_id,))
+    conn.execute("DELETE FROM mapeamento_produtos_nfe WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM insumos WHERE id = ?", (insumo_id,))
     conn.commit()
     conn.close()
@@ -396,49 +403,157 @@ def contagens_do_dia(data: str) -> dict:
     return {linha["nome"]: linha["quantidade_contada"] for linha in linhas}
 
 
-def registrar_contagens_em_lote(itens: list[dict], data: str,
-                                 observacao: str = None) -> int:
-    """Grava a contagem de vários insumos de uma vez, num dia só.
+# ---------- Contagem pela planilha ----------
+# A contagem física é feita linha a linha da planilha do restaurante, na
+# unidade em que cada coisa está na prateleira (peça, pacote, garrafa). O
+# cálculo de estoque, porém, trabalha por insumo e na unidade da ficha
+# técnica. As funções abaixo fazem essa ponte: cada linha tem um fator, e
+# o insumo recebe a soma das suas linhas convertidas.
 
-    `itens` é uma lista de {'insumo': nome, 'quantidade': float}. Cada
-    insumo **substitui** a contagem que já existisse nesse mesmo dia, em
-    vez de somar outra linha: gravar duas vezes dá o mesmo resultado que
-    gravar uma. Numa contagem de mais de cem insumos, feita com o celular
-    na mão no meio do estoque, reenviar a tela é acidente esperado.
+def itens_da_contagem() -> list[dict]:
+    """As linhas da planilha de contagem, na ordem dela, com o insumo de cada uma."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT ic.id, ic.descricao, ic.secao, ic.ordem, ic.unidade_contagem,
+               ic.fator_conversao, i.nome AS insumo, i.unidade_medida AS unidade_insumo
+        FROM itens_contagem ic
+        JOIN insumos i ON i.id = ic.insumo_id
+        ORDER BY ic.ordem
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
 
-    Os insumos são todos resolvidos antes de qualquer escrita — uma
-    contagem pela metade seria pior que nenhuma, porque viraria a base do
-    cálculo mesmo assim.
+
+def contagem_por_item_do_dia(data: str) -> dict:
+    """{id do item: quantidade na unidade da contagem} já gravados numa data."""
+    conn = get_connection()
+    linhas = conn.execute(
+        "SELECT item_id, quantidade FROM contagens_itens WHERE data = ?", (data,)
+    ).fetchall()
+    conn.close()
+    return {linha["item_id"]: linha["quantidade"] for linha in linhas}
+
+
+def resumo_da_contagem(por_item: dict, por_insumo: dict, itens: list[dict] = None) -> dict:
+    """Converte o que foi digitado em contagem por insumo, sem gravar nada.
+
+    `por_item` é {id do item: quantidade na unidade da linha}; `por_insumo`
+    é {nome do insumo: quantidade}, para os insumos que não estão na
+    planilha e são contados direto.
+
+    Duas regras, e é por causa delas que isto é uma função e não uma soma:
+
+    - **Um insumo é contado se qualquer linha dele foi preenchida, e aí as
+      linhas irmãs em branco valem zero.** O branco continua significando
+      "não mexe" para o insumo como um todo; mas, se a alcatra em peça foi
+      contada e a porcionada não, gravar só a peça como estoque total da
+      alcatra seria uma contagem pela metade. As irmãs em branco voltam
+      listadas em 'em_branco', para quem conta conferir antes de gravar.
+    - **Linha preenchida sem fator trava o insumo inteiro.** Sem saber
+      quantos kg tem um maço, não há número honesto para gravar; o insumo
+      volta em 'sem_fator' e fica de fora, e os outros seguem.
     """
-    if not itens:
-        raise ValueError("Nenhuma contagem preenchida para gravar.")
+    itens = itens if itens is not None else itens_da_contagem()
+    por_id = {item["id"]: item for item in itens}
+    linhas_do_insumo = {}
+    for item in itens:
+        linhas_do_insumo.setdefault(item["insumo"], []).append(item)
+
+    totais, sem_fator, em_branco, composicao = {}, {}, {}, {}
+    contados = {por_id[i]["insumo"] for i in por_item if i in por_id}
+    for insumo in sorted(contados):
+        total, partes = 0.0, []
+        for item in linhas_do_insumo[insumo]:
+            quantidade = por_item.get(item["id"])
+            if quantidade is None:
+                em_branco.setdefault(insumo, []).append(item["descricao"])
+                continue
+            if quantidade < 0:
+                raise ValueError(f"A contagem de '{item['descricao']}' não pode ser negativa.")
+            if item["fator_conversao"] is None:
+                sem_fator.setdefault(insumo, []).append(item["descricao"])
+                continue
+            total += quantidade * item["fator_conversao"]
+            partes.append(f"{quantidade:g} {item['unidade_contagem']} de {item['descricao']}")
+        if insumo in sem_fator:
+            em_branco.pop(insumo, None)
+            continue
+        totais[insumo] = round(total, 4)
+        composicao[insumo] = partes
+
+    for insumo, quantidade in por_insumo.items():
+        if quantidade < 0:
+            raise ValueError(f"A contagem de '{insumo}' não pode ser negativa.")
+        if insumo in linhas_do_insumo:
+            raise ValueError(
+                f"'{insumo}' é contado pelas linhas da planilha, não direto."
+            )
+        totais[insumo] = float(quantidade)
+        composicao[insumo] = []
+
+    return {
+        "totais": totais,
+        "sem_fator": sem_fator,
+        "em_branco": em_branco,
+        "composicao": composicao,
+    }
+
+
+def registrar_contagem_pela_planilha(por_item: dict, por_insumo: dict, data: str,
+                                     observacao: str = None) -> dict:
+    """Grava a contagem do dia linha a linha e o total de cada insumo.
+
+    Guarda as duas coisas, na mesma transação: o que foi digitado em cada
+    linha (`contagens_itens`, para a tela reabrir preenchida e para saber
+    de onde saiu cada total) e o total convertido de cada insumo
+    (`contagens_fisicas`, que é o que o cálculo de estoque usa).
+
+    Vale o mesmo contrato da contagem por insumo: tudo ou nada, e gravar
+    de novo no mesmo dia substitui em vez de somar. Insumo com linha sem
+    fator não é gravado (ver `resumo_da_contagem`).
+    """
+    itens = itens_da_contagem()
+    resumo = resumo_da_contagem(por_item, por_insumo, itens)
+    if not resumo["totais"]:
+        raise ValueError("Nenhuma contagem que dê para gravar.")
+
+    ids_de_insumo = {}
+    gravaveis = {i["id"] for i in itens if i["insumo"] in resumo["totais"]}
 
     conn = get_connection()
     try:
-        resolvidos = []
-        for item in itens:
-            quantidade = float(item["quantidade"])
-            if quantidade < 0:
-                raise ValueError(
-                    f"A contagem de '{item['insumo']}' não pode ser negativa."
-                )
-            insumo = conn.execute(
-                "SELECT id FROM insumos WHERE nome = ?", (item["insumo"],)
-            ).fetchone()
-            if not insumo:
-                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
-            resolvidos.append((insumo["id"], quantidade))
+        for insumo in resumo["totais"]:
+            linha = conn.execute("SELECT id FROM insumos WHERE nome = ?", (insumo,)).fetchone()
+            if not linha:
+                raise ValueError(f"Insumo '{insumo}' não encontrado.")
+            ids_de_insumo[insumo] = linha["id"]
 
-        for insumo_id, quantidade in resolvidos:
+        for item_id in gravaveis:
+            conn.execute(
+                "DELETE FROM contagens_itens WHERE item_id = ? AND data = ?",
+                (item_id, data),
+            )
+            if item_id in por_item:
+                conn.execute(
+                    "INSERT INTO contagens_itens (item_id, data, quantidade) VALUES (?, ?, ?)",
+                    (item_id, data, float(por_item[item_id])),
+                )
+
+        for insumo, total in resumo["totais"].items():
+            partes = resumo["composicao"][insumo]
+            detalhe = "; ".join(partes) if len(partes) > 1 else None
+            nota = " · ".join(t for t in (observacao, detalhe) if t) or None
             conn.execute(
                 "DELETE FROM contagens_fisicas WHERE insumo_id = ? AND data = ?",
-                (insumo_id, data),
+                (ids_de_insumo[insumo], data),
             )
             conn.execute(
                 """INSERT INTO contagens_fisicas
                        (insumo_id, quantidade_contada, data, observacao)
                    VALUES (?, ?, ?, ?)""",
-                (insumo_id, quantidade, data, observacao),
+                (ids_de_insumo[insumo], total, data, nota),
             )
         conn.commit()
     except Exception:
@@ -446,7 +561,35 @@ def registrar_contagens_em_lote(itens: list[dict], data: str,
         conn.close()
         raise
     conn.close()
-    return len(resolvidos)
+    return resumo
+
+
+def atualizar_fatores_da_contagem(fatores: dict) -> int:
+    """Grava o fator de várias linhas da contagem: {id do item: fator}.
+
+    Um fator vazio volta a ser "a definir". Zero não é aceito: uma linha
+    que converte para zero apagaria o insumo em silêncio em toda contagem.
+    """
+    if not fatores:
+        raise ValueError("Nenhum fator preenchido para gravar.")
+    conn = get_connection()
+    try:
+        for item_id, fator in fatores.items():
+            if fator is not None and fator <= 0:
+                raise ValueError("O fator precisa ser maior que zero.")
+            cursor = conn.execute(
+                "UPDATE itens_contagem SET fator_conversao = ? WHERE id = ?",
+                (fator, item_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Item de contagem {item_id} não encontrado.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(fatores)
 
 
 def lancar_vendas_em_lote(itens: list[dict], data: str) -> dict:
@@ -1230,18 +1373,96 @@ def dias_sem_lancamento(inicio: str, fim: str) -> list[str]:
     real e o estoque teórico fica alto. Por isso os buracos são listados
     junto com o resultado, em vez de ficarem invisíveis.
 
-    Um dia de folga do restaurante também cai aqui; a lista é um aviso
-    para conferir, não um erro.
+    Dia marcado como "o restaurante não abriu" não entra: sem essa marca,
+    uma folga ficaria acusando falta para sempre, e aviso que nunca some
+    é aviso que ninguém mais lê.
     """
     lancados = {linha["data"] for linha in vendas_por_dia_no_periodo(inicio, fim)}
+    fechados = dias_sem_movimento(inicio, fim)
     d1 = datetime.date.fromisoformat(inicio)
     d2 = datetime.date.fromisoformat(fim)
     faltando = []
     while d1 <= d2:
-        if d1.isoformat() not in lancados:
-            faltando.append(d1.isoformat())
+        dia = d1.isoformat()
+        if dia not in lancados and dia not in fechados:
+            faltando.append(dia)
         d1 += datetime.timedelta(days=1)
     return faltando
+
+
+def dias_sem_movimento(inicio: str, fim: str) -> set[str]:
+    """Dias do período marcados como 'o restaurante não abriu'."""
+    conn = get_connection()
+    linhas = conn.execute(
+        "SELECT data FROM dias_sem_movimento WHERE data >= ? AND data <= ?",
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return {linha["data"] for linha in linhas}
+
+
+def marcar_dia_sem_movimento(data: str):
+    """Registra que o restaurante não abriu nesse dia. Marcar duas vezes não duplica."""
+    conn = get_connection()
+    conn.execute("DELETE FROM dias_sem_movimento WHERE data = ?", (data,))
+    conn.execute(
+        "INSERT INTO dias_sem_movimento (data, marcado_em) VALUES (?, ?)",
+        (data, datetime.datetime.now(FUSO).isoformat(timespec="minutes")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def desmarcar_dia_sem_movimento(data: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM dias_sem_movimento WHERE data = ?", (data,))
+    conn.commit()
+    conn.close()
+
+
+# Até quantos dias para trás o lembrete olha. Mais que duas semanas o
+# lembrete deixa de ser lembrete: quem esqueceu um dia há um mês já não
+# tem o resumo do PDV à mão, e a lista só cresceria.
+JANELA_DO_LEMBRETE = 14
+
+
+def vendas_pendentes(janela: int = JANELA_DO_LEMBRETE) -> list[str]:
+    """Dias recentes que deviam ter venda lançada e não têm.
+
+    É o lembrete do dia a dia. O relatório da semana (`dias_sem_lancamento`
+    na tela de Saída) já mostrava os buracos, mas só na segunda-feira —
+    quando o resumo do PDV daquela quarta já foi para o lixo. Aqui o dia
+    esquecido aparece no dia seguinte.
+
+    Três limites evitam alarme falso:
+
+    - **hoje não entra**: o movimento de hoje ainda está acontecendo, e o
+      normal é lançar no fechamento ou na manhã seguinte;
+    - **nada antes do início do uso**: o lembrete só começa na primeira
+      contagem física ou na primeira venda lançada, o que vier antes. Sem
+      isso, um sistema recém-implantado acusaria semanas de "esquecimento";
+    - **dia marcado como fechado** não conta.
+    """
+    conn = get_connection()
+    inicio_do_uso = conn.execute(
+        """SELECT MIN(data) AS d FROM (
+               SELECT MIN(data) AS data FROM vendas_diarias
+               UNION ALL
+               SELECT MIN(data) AS data FROM contagens_fisicas
+           ) AS primeiros"""
+    ).fetchone()["d"]
+    conn.close()
+    if not inicio_do_uso:
+        return []
+
+    ontem = hoje() - datetime.timedelta(days=1)
+    inicio = max(
+        datetime.date.fromisoformat(inicio_do_uso),
+        hoje() - datetime.timedelta(days=janela),
+    )
+    if inicio > ontem:
+        return []
+    return dias_sem_lancamento(inicio.isoformat(), ontem.isoformat())
 
 
 def resumo_do_periodo(inicio: str, fim: str) -> dict:
