@@ -570,6 +570,29 @@ def _tabela_em_lote(linhas, coluna_item, coluna_valor, rotulo_valor, chave,
     return valores
 
 
+def _guardar_resultado(chave, valores, resultado):
+    """Guarda o que a gravação de uma tabela em lote produziu, para mostrar depois.
+
+    A mensagem não pode ser desenhada só na execução do botão. Nela a
+    tabela é remontada com os valores digitados já embutidos nos dados; o
+    `data_editor` percebe que os dados mudaram, descarta as edições
+    pendentes e dispara mais uma execução — que redesenhava a página sem a
+    confirmação e sem o relatório de divergências. O dado era gravado, mas
+    quem gravou não via nada. Guardado aqui, o resultado sobrevive a essa
+    execução extra e só some quando a tabela é editada de novo.
+    """
+    st.session_state[f"{chave}_resultado"] = {"valores": dict(valores), **resultado}
+
+
+def _resultado_guardado(chave, valores):
+    """O resultado da última gravação, se a tabela não mudou desde ela."""
+    resultado = st.session_state.get(f"{chave}_resultado")
+    if resultado and resultado["valores"] == valores:
+        return resultado
+    st.session_state.pop(f"{chave}_resultado", None)
+    return None
+
+
 def _como_itens(valores, chave_item, chave_valor):
     """O dicionário da tabela vira a lista que as funções de lote esperam."""
     return [
@@ -1799,9 +1822,10 @@ def _venda_em_lote(pratos, data_iso):
         "**Preencha o que vendeu.** Em branco = não mexe. "
         "**0** apaga o lançamento daquele prato no dia."
     )
+    chave = f"venda_lote_{data_iso}"
     linhas = [{"Prato": nome, "Qtd.": lancado.get(nome)} for nome in pratos]
     valores = _tabela_em_lote(
-        linhas, "Prato", "Qtd.", "Qtd.", f"venda_lote_{data_iso}",
+        linhas, "Prato", "Qtd.", "Qtd.", chave,
         "%d", "Filtrar prato", passo=1,
     )
 
@@ -1829,7 +1853,10 @@ def _venda_em_lote(pratos, data_iso):
         except Exception as e:
             st.error(f"Nada foi gravado: {e}")
             return
+        _guardar_resultado(chave, valores, resultado)
 
+    resultado = _resultado_guardado(chave, valores)
+    if resultado:
         st.success(
             f"{resultado['gravados']} prato(s) gravado(s) em {_data_br(data_iso)}"
             + (f", {resultado['apagados']} apagado(s)." if resultado["apagados"] else "."),
@@ -2186,6 +2213,9 @@ def pagina_zig():
 
 def _editor_de_fatores(itens):
     """Onde se diz quanto vale cada unidade contada, em lote."""
+    gravados = st.session_state.pop("fatores_gravados", None)
+    if gravados:
+        st.success(f"{gravados} fator(es) gravado(s).", icon=":material/check_circle:")
     pendentes = [i for i in itens if i["fator_conversao"] is None]
     if pendentes:
         st.warning(
@@ -2238,7 +2268,9 @@ def _editor_de_fatores(itens):
             st.error(f"Nada foi gravado: {e}")
             return
         st.session_state["fatores_versao"] = versao + 1
-        st.success(f"{total} fator(es) gravado(s).", icon=":material/check_circle:")
+        # A tabela recomeça numa chave nova, lida do banco; a confirmação vai
+        # para a execução seguinte, senão o rerun a apagaria.
+        st.session_state["fatores_gravados"] = total
         st.rerun()
 
 
@@ -2348,7 +2380,8 @@ def _linhas_da_contagem(data_iso, insumos, unidades):
         elif fator == 1 and item["unidade_contagem"] == item["unidade_insumo"]:
             destino = item["insumo"]
         else:
-            destino = f"{item['insumo']} · 1 = {fator:g} {item['unidade_insumo']}"
+            numero = f"{fator:g}".replace(".", ",")
+            destino = f"{item['insumo']} · 1 = {numero} {item['unidade_insumo']}"
         linhas.append({
             "Seção": item["secao"],
             "Item": item["descricao"],
@@ -2462,7 +2495,12 @@ def pagina_contagem():
             help="A mesma ordem da planilha de papel: conte uma seção, passe para a próxima. "
                  "O que foi digitado nas outras seções fica guardado.",
         )
-    if secao == TODAS_AS_SECOES:
+    if not itens:
+        # Sem planilha importada, toda linha é um insumo contado direto:
+        # "Fora da planilha" e "Vai para" repetiriam o óbvio em cada linha.
+        visiveis = [{k: v for k, v in l.items() if k not in ("Seção", "Vai para")}
+                    for l in linhas]
+    elif secao == TODAS_AS_SECOES:
         visiveis = linhas
     else:
         visiveis = [{k: v for k, v in l.items() if k != "Seção"}
@@ -2519,29 +2557,33 @@ def pagina_contagem():
             return
 
         st.session_state[f"{chave}_ja_gravado"] = True
-        st.success(
-            f"{len(resumo['totais'])} insumo(s) gravado(s) em {_data_br(data_iso)}. "
-            "Esta é a nova base do cálculo.",
-            icon=":material/check_circle:",
-        )
-
         # A diferença entre o que o sistema calculava e o que foi contado é
         # a informação que a contagem existe para produzir. Mostrar na hora
         # evita que ela só apareça na tela de perdas, um mês depois.
-        gravados = resumo["totais"]
-        diferencas = []
-        for nome, contado in gravados.items():
-            teorico = teoricos.get(nome)
-            if teorico is None:
-                continue
-            diferencas.append({
+        diferencas = [
+            {
                 "Insumo": nome,
-                "Teórico": teorico,
+                "Teórico": teoricos[nome],
                 "Contado": contado,
-                "Diferença": round(contado - teorico, 3),
+                "Diferença": round(contado - teoricos[nome], 3),
                 "Un.": unidades.get(nome, ""),
-            })
-        divergentes = [d for d in diferencas if abs(d["Diferença"]) > 0.001]
+            }
+            for nome, contado in resumo["totais"].items()
+            if teoricos.get(nome) is not None
+        ]
+        _guardar_resultado(chave, valores, {
+            "gravados": len(resumo["totais"]),
+            "divergentes": [d for d in diferencas if abs(d["Diferença"]) > 0.001],
+        })
+
+    resultado = _resultado_guardado(chave, valores)
+    if resultado:
+        st.success(
+            f"{resultado['gravados']} insumo(s) gravado(s) em {_data_br(data_iso)}. "
+            "Esta é a nova base do cálculo.",
+            icon=":material/check_circle:",
+        )
+        divergentes = resultado["divergentes"]
         if divergentes:
             st.write(f"**{len(divergentes)} insumo(s) diferentes do calculado**")
             st.dataframe(

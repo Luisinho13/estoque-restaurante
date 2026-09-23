@@ -516,6 +516,28 @@ demonstração — e o erro só apareceria na tela de login, sem explicar a
 causa. O script agora cria também um admin de demonstração e imprime a
 credencial ao terminar.
 
+### Nas telas em lote
+
+**A confirmação aparecia e sumia.** Depois de gravar a venda do dia ou a
+contagem, a mensagem de sucesso e o relatório de divergências piscavam
+na tela e desapareciam. O dado estava gravado — a tela seguinte mostrava
+—, mas quem gravou ficava sem confirmação e, na contagem, sem a lista do
+que divergiu do calculado, que é justamente o que a contagem existe para
+mostrar.
+
+A causa é um detalhe do `st.data_editor`. As tabelas em lote são
+remontadas a cada execução a partir do que já foi digitado; na execução
+do botão, os valores digitados passam a vir embutidos nos dados. O
+editor percebe que os dados mudaram, descarta as edições pendentes e
+dispara mais uma execução — que redesenhava a página sem a mensagem,
+porque ela só existia na execução do clique. Hoje o resultado da
+gravação fica guardado na sessão e é mostrado até a tabela ser editada
+de novo.
+
+O teste automatizado das telas não pegava isso: ele não dirige o
+`data_editor` e não reproduz a execução extra que o navegador dispara.
+Foi preciso clicar e digitar numa tabela de verdade.
+
 ### O fio que liga todos
 
 Nenhum desses problemas deu mensagem de erro. O estoque errado, o
@@ -678,6 +700,13 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 ## Patch notes
 
 ### v0.10 — A contagem da planilha
+
+- **Corrigido: a confirmação sumia depois de gravar.** Nas telas em lote
+  (venda do dia e contagem), a mensagem de gravado e o relatório de
+  divergências da contagem apareciam e desapareciam no mesmo instante. O
+  dado era gravado, mas quem gravou não via nada — nem a divergência, que
+  é o motivo de a contagem existir. Encontrado testando no navegador; o
+  teste automatizado não enxerga esse efeito
 
 - **Contagem física pela planilha do restaurante.** A tela passou a
   seguir a planilha de contagem que a equipe já usava: mesmas seções,
