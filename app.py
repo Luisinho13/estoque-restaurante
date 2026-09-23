@@ -19,8 +19,6 @@ import ficha_import
 import nfe_import
 import zig_import
 
-database.criar_tabelas()  # garante que as tabelas existem ao abrir o app
-
 MODO_DEMO = database.modo_demo()
 
 st.set_page_config(
@@ -29,6 +27,31 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# O banco na nuvem dorme quando fica sem uso, e acordá-lo leva alguns
+# segundos. Quando nem assim ele responde, quem abriu o app precisa ver o
+# que aconteceu e um botão — e não uma tela de exceção, que não diz nada a
+# quem está lançando a venda no fim do expediente.
+try:
+    # O spinner existe para a espera não ser uma tela em branco: acordar o
+    # banco leva alguns segundos, e sem sinal nenhum parece travamento.
+    with st.spinner("Conectando ao banco de dados…"):
+        database.criar_tabelas()  # garante que as tabelas existem ao abrir o app
+except database.BancoIndisponivel:
+    st.title("📦 Controle de Estoque")
+    st.error(
+        "**O banco de dados não respondeu.** Ele hiberna quando fica um "
+        "tempo sem uso e leva alguns segundos para acordar. Normalmente "
+        "basta tentar de novo.",
+        icon=":material/cloud_off:",
+    )
+    if st.button("Tentar de novo", type="primary", icon=":material/refresh:"):
+        st.rerun()
+    st.caption(
+        "Se continuar assim depois de algumas tentativas, o problema não é "
+        "hibernação: verifique o banco no Neon e os secrets do app."
+    )
+    st.stop()
 
 COR = "#2E7D6F"
 COR_ALERTA = "#C1443F"

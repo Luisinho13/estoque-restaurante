@@ -29,6 +29,7 @@ Estrutura:
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 CAMINHO_DEMO = Path(__file__).parent / "estoque_demo.db"
@@ -281,6 +282,29 @@ class _ConexaoPostgres:
         pass
 
 
+# O Postgres fica no Neon, cujo plano gratuito **suspende o banco** depois
+# de alguns minutos sem uso. A primeira conexão depois disso precisa
+# acordar a máquina, o que leva alguns segundos e pode falhar de primeira.
+#
+# A versão anterior chamava psycopg.connect() uma única vez, sem timeout e
+# sem repetir: bastava o banco estar dormindo para o app inteiro estourar
+# um OperationalError na cara de quem abriu. Num restaurante, às onze da
+# noite, isso não é uma falha técnica — é o sistema "não estar
+# funcionando", e o lançamento do dia não acontece.
+TENTATIVAS_DE_CONEXAO = 3
+ESPERA_ENTRE_TENTATIVAS = (1, 2)   # segundos, antes da 2ª e da 3ª tentativa
+TIMEOUT_DE_CONEXAO = 6             # segundos por tentativa
+
+
+class BancoIndisponivel(RuntimeError):
+    """O banco não respondeu depois de todas as tentativas.
+
+    Erro próprio para a interface conseguir distinguir "o banco está
+    dormindo/fora do ar" de um defeito de programação, e mostrar um aviso
+    com botão de tentar de novo em vez de uma tela de exceção.
+    """
+
+
 def _conexao_postgres():
     import psycopg
     from psycopg.rows import dict_row
@@ -297,9 +321,29 @@ def _conexao_postgres():
             except Exception:
                 pass
 
-    conn = psycopg.connect(url_do_postgres(), row_factory=dict_row)
-    _local.conn = conn
-    return _ConexaoPostgres(conn)
+    # Zera antes de tentar: se a reconexão falhar, o objeto morto não pode
+    # continuar guardado, ou a próxima chamada tentaria usá-lo de novo.
+    _local.conn = None
+
+    ultimo_erro = None
+    for tentativa in range(TENTATIVAS_DE_CONEXAO):
+        if tentativa:
+            time.sleep(ESPERA_ENTRE_TENTATIVAS[tentativa - 1])
+        try:
+            conn = psycopg.connect(
+                url_do_postgres(),
+                row_factory=dict_row,
+                connect_timeout=TIMEOUT_DE_CONEXAO,
+            )
+        except Exception as erro:
+            ultimo_erro = erro
+            continue
+        _local.conn = conn
+        return _ConexaoPostgres(conn)
+
+    raise BancoIndisponivel(
+        f"O banco não respondeu depois de {TENTATIVAS_DE_CONEXAO} tentativas."
+    ) from ultimo_erro
 
 
 # ---------- Conexão ----------

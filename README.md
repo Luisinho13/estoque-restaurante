@@ -253,8 +253,9 @@ abaixo é a lista completa do que foi encontrado até aqui.
 | 14 | **Script de demonstração escreveu em produção** | `ESTOQUE_DB` só escolhe o *arquivo* do SQLite, não impede a escolha do Postgres |
 | 15 | **A camada de alerta estava morta** | 127 de 128 insumos com estoque mínimo zero: o semáforo nunca saía do verde |
 | 16 | **Lançar o dia levaria dezenas de envios** | Formulário de um item por vez, com 87 pratos e 128 insumos |
+| 17 | **O app estourava ao abrir depois de um tempo parado** | O banco na nuvem hiberna, e a conexão era tentada uma única vez, sem timeout nem repetição |
 
-Os dez primeiros foram resolvidos durante a construção; os de 11 a 16
+Os dez primeiros foram resolvidos durante a construção; os de 11 a 17
 apareceram na preparação para o sistema entrar em uso de verdade, e estão
 contados em detalhe abaixo.
 
@@ -392,6 +393,21 @@ dia tinha que apagar antes. A troca foi mudar o padrão. Lançar passou a
 fazia: o número digitado é o total, relançar corrige, e clicar duas vezes
 dá o mesmo resultado que clicar uma. Somar continua existindo, mas como
 escolha explícita.
+
+**O app estourava ao ser aberto depois de um tempo parado.** Uma tela de
+erro do Streamlit, com a mensagem censurada, logo no primeiro acesso do
+dia. O banco fica no Neon, cujo plano gratuito **suspende a máquina**
+depois de alguns minutos sem uso — e a primeira conexão depois disso
+precisa acordá-la, o que leva alguns segundos e pode falhar de primeira.
+O código chamava `psycopg.connect()` uma única vez, sem timeout e sem
+repetir: bastava o banco estar dormindo para o app inteiro cair.
+
+O detalhe que fez isso valer a pena consertar não é técnico. Num
+restaurante, às onze da noite, uma tela de exceção não é "um erro de
+conexão" — é o sistema não estar funcionando, e o lançamento do dia não
+acontece. Agora a conexão é tentada três vezes, com timeout e espera
+crescente entre elas, e quando mesmo assim não vai, a tela mostra o que
+houve e um botão de tentar de novo, em vez de um traceback.
 
 **Um script de demonstração escreveu no banco de produção.** O
 `seed_demo.py` gera um banco fictício e, para isso, apaga e recria tudo.
@@ -604,6 +620,14 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.9.1 — O banco que dormia
+
+- **Corrigido: o app estourava ao abrir depois de um tempo parado.** O
+  Postgres no Neon hiberna sem uso e a conexão era tentada uma única vez,
+  sem timeout nem repetição. Agora são três tentativas com espera
+  crescente, e a falha final vira um aviso com botão de tentar de novo —
+  não uma tela de exceção
 
 ### v0.9 — A operação em lote
 
