@@ -5,7 +5,9 @@ a partir de compras e vendas. A contagem física deixa de ser a rotina de
 toda segunda-feira e vira uma conferência mensal.
 
 Projeto pessoal, criado para um problema real do restaurante onde
-trabalho como comprador.
+trabalho como comprador. **Entra em uso de verdade em setembro de 2026**,
+com 128 insumos, 87 pratos e 546 linhas de ficha técnica vindas das
+planilhas da cozinha.
 
 **▶️ Demonstração, sem cadastro:**
 https://estoque-restaurante-4nhzp9k8m6illpc2cjkg3l.streamlit.app
@@ -49,6 +51,15 @@ estoque atual = última contagem física
 A ficha técnica de cada prato diz quanto de cada insumo é consumido por
 unidade vendida. Com as vendas do dia lançadas, o sistema já sabe quanto
 saiu de cada ingrediente.
+
+Não houve integração com a Zig, o PDV do restaurante — não há API pública
+documentada. Então **as vendas são lançadas à mão, todo dia**. Isso deixou
+de ser um detalhe de implementação e virou a restrição que desenhou o
+sistema: uma tela de lançamento que não caiba na rotina de fechamento
+simplesmente não é usada, e um dia não lançado não dá erro nenhum — só faz
+o consumo sair menor que o real e o estoque teórico ficar alto. Daí as
+telas em lote, o padrão de substituir em vez de somar, e o aviso de dias
+sem lançamento.
 
 A contagem física continua existindo, **1x por mês**, com outro papel:
 ela é o ponto de partida do cálculo e a forma de medir perda, quebra e
@@ -117,11 +128,12 @@ não olhar.
   Em branco não mexe no prato; zero apaga o lançamento dele no dia. É a
   tela do dia a dia — prato a prato seriam dezenas de envios por noite, e
   o que não cabe na rotina acaba não sendo lançado
-- Lançamento avulso por prato, para corrigir ou completar um só. O padrão é **substituir** o total do dia, não somar: relançar
-  o mesmo prato corrige o dia em vez de duplicá-lo, e clicar duas vezes no
-  botão dá o mesmo resultado que clicar uma. A tela mostra o que o prato
-  tira do estoque pela ficha técnica, e avisa quando o prato não tem ficha
-  — caso em que a venda não desconta nada
+- Lançamento avulso por prato, para corrigir ou completar um só. O padrão
+  é **substituir** o total do dia, não somar: relançar o mesmo prato
+  corrige o dia em vez de duplicá-lo, e clicar duas vezes no botão dá o
+  mesmo resultado que clicar uma. A tela mostra o que o prato tira do
+  estoque pela ficha técnica, e avisa quando o prato não tem ficha — caso
+  em que a venda não desconta nada
 
 **Conferência**
 - **Saída de Estoque no Período**: as vendas lançadas dia a dia somadas
