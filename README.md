@@ -388,6 +388,16 @@ ingrediente. Cadastrados como bebida, virariam insumos que ninguém
 consome, e os da ficha, insumos que ninguém conta. As duas linhas caem
 nos insumos da cozinha, convertidas de garrafa para litro.
 
+**Cancelado com cara de vendido.** A Zig nem sempre marca o
+cancelamento como cancelamento: muitas vezes o prato continua lá, como
+venda normal, só que com desconto igual ao preço e valor total zero. O
+filtro de tipo de transação deixava tudo passar, e cada prato cancelado
+virava consumo de um prato que não saiu da cozinha — a diferença só
+apareceria na contagem, como sobra sem explicação. O critério óbvio,
+"valor zero", também estava errado: o fondue de chocolate incluído na
+sequência sai com preço zero e sem desconto, e esse é servido. O que
+separa os dois é o desconto: desconto maior que zero **e** total zero.
+
 **Um mapeamento errado era definitivo.** A tela de importação mostrava
 apenas os produtos ainda não mapeados. Quem ligasse um produto ao prato
 errado não tinha como voltar atrás pela interface — só apagando o prato
@@ -698,6 +708,17 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.10.1 — Prato cancelado não é prato vendido
+
+- **Corrigido: cancelamento na Zig contava como venda.** A Zig muitas
+  vezes registra o prato cancelado como venda "Normal" com 100% de
+  desconto e valor zero. O importador descartava só o que vinha com
+  outro tipo de transação, então esses pratos davam baixa no estoque sem
+  ter saído da cozinha. Agora linha com desconto e valor total zero fica
+  de fora e aparece listada na importação. Desconto parcial e item de
+  preço zero sem desconto (o fondue incluído na sequência) continuam
+  contando
 
 ### v0.10 — A contagem da planilha
 

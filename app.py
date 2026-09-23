@@ -2110,6 +2110,25 @@ def pagina_zig():
             f"{dados['descartadas']} linha(s) não são transações normais "
             "(cancelamento/estorno) e ficaram de fora da conta."
         )
+    cancelados = dados.get("cancelados") or []
+    if cancelados:
+        with st.expander(
+            f"🚫 {len(cancelados)} item(ns) com desconto total ficaram de fora "
+            "(prato cancelado, não dá baixa no estoque)"
+        ):
+            st.caption(
+                "A Zig registra o cancelamento como venda com 100% de desconto. "
+                "Esses itens não descontam nada do estoque. Desconto parcial e "
+                "item de preço zero sem desconto (como o fondue da sequência) "
+                "continuam contando normalmente."
+            )
+            st.dataframe(
+                pd.DataFrame(cancelados).rename(columns={
+                    "data": "Dia", "nome": "Produto",
+                    "quantidade": "Qtd.", "cliente": "Mesa",
+                }),
+                width="stretch", hide_index=True,
+            )
 
     reconhecidos = []
     ignorados = []

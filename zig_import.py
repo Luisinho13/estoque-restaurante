@@ -29,6 +29,9 @@ COLUNAS_OBRIGATORIAS = ["SKU", "Nome do Produto", "Quantidade"]
 COLUNA_DATA_PREFERIDA = "Data do Evento"
 COLUNA_DATA_ALTERNATIVA = "Data"
 
+COLUNA_DESCONTO = "Valor de Desconto"
+COLUNA_TOTAL = "Valor total"
+
 
 def extrair_vendas_zig(arquivo) -> dict:
     """Lê a planilha e devolve as vendas somadas por produto e por dia."""
@@ -57,6 +60,30 @@ def extrair_vendas_zig(arquivo) -> dict:
     )
     if coluna_data not in df.columns:
         raise ValueError("A planilha não tem nenhuma coluna de data reconhecível.")
+
+    # Na Zig, prato cancelado nem sempre vira outro tipo de transação: muitas
+    # vezes ele fica como "Normal", com desconto igual ao preço e valor total
+    # zero. Contado como venda, desconta do estoque um prato que não saiu da
+    # cozinha, e a diferença aparece depois como sobra na contagem.
+    #
+    # O critério é desconto maior que zero E total zero. Só "total zero" não
+    # serve: o fondue de chocolate da sequência vem com preço zero e sem
+    # desconto, porque está incluído no combo — esse é servido e consome.
+    # Desconto parcial também continua contando: é venda com abatimento.
+    cancelados = []
+    if COLUNA_DESCONTO in df.columns and COLUNA_TOTAL in df.columns:
+        desconto = pd.to_numeric(df[COLUNA_DESCONTO], errors="coerce").fillna(0)
+        total = pd.to_numeric(df[COLUNA_TOTAL], errors="coerce")
+        zerados = (desconto > 0) & (total.abs() < 0.005)
+        for _, linha in df[zerados].iterrows():
+            data = pd.to_datetime(linha[coluna_data], dayfirst=True, errors="coerce")
+            cancelados.append({
+                "data": data.strftime("%Y-%m-%d") if pd.notna(data) else "",
+                "nome": linha["Nome do Produto"],
+                "quantidade": linha["Quantidade"],
+                "cliente": linha.get("Cliente", ""),
+            })
+        df = df[~zerados]
 
     df = df.assign(
         _data=pd.to_datetime(df[coluna_data], dayfirst=True, errors="coerce"),
@@ -87,6 +114,7 @@ def extrair_vendas_zig(arquivo) -> dict:
         "datas": sorted({linha["data"] for linha in linhas}),
         "total_linhas": total_linhas,
         "descartadas": descartadas,
+        "cancelados": cancelados,
         "coluna_data": coluna_data,
     }
 
@@ -132,6 +160,10 @@ def importar_zig(caminho_planilha: str):
     print(f"{dados['total_linhas']} linha(s) na planilha — período: {periodo}")
     if dados["descartadas"]:
         print(f"{dados['descartadas']} linha(s) descartada(s) por não serem transações normais.")
+    if dados["cancelados"]:
+        print(f"{len(dados['cancelados'])} linha(s) com desconto total ficaram de fora (cancelamento):")
+        for c in dados["cancelados"]:
+            print(f"  - {c['data']}  {c['nome']} ({c['quantidade']}) · {c['cliente']}")
 
     lancadas, ignoradas, nao_mapeadas = processar_vendas_zig(dados)
 
