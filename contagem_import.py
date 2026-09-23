@@ -67,9 +67,14 @@ MEDIDAS = {
 }
 
 
-def _i(insumo, fator, unidade):
-    """Uma linha de alimento: vai para `insumo` (em `unidade`), 1 contada = `fator`."""
-    return (insumo, fator, unidade)
+def _i(insumo, fator, unidade, conta_em=None):
+    """Uma linha de alimento: vai para `insumo` (em `unidade`), 1 contada = `fator`.
+
+    `conta_em` troca a unidade de contagem quando a "Medida" da planilha
+    não é como a equipe conta de verdade (ex.: morango em bandeja, não em
+    caixa). Informado pelo usuário em 23/09/2026.
+    """
+    return (insumo, fator, unidade, conta_em)
 
 
 A_DEFINIR = None   # fator que depende de um peso que a planilha não diz
@@ -97,7 +102,7 @@ ALIMENTOS = {
     "AZEITE GALLO GL 2LT": _i("Azeite", 2, "l"),
     "AZEITE GALLO VD 500ML": _i("Azeite", 0.5, "l"),
     "AZEITE GL 5LT": _i("Azeite", 5, "l"),
-    "AZEITE TRUFADO ( SAVITAR/ COLLITALI)": _i("Azeite trufado", A_DEFINIR, "l"),
+    "AZEITE TRUFADO ( SAVITAR/ COLLITALI)": _i("Azeite trufado", A_DEFINIR, "l", "un"),
     "AZEITONAS PRETAS AZAPA 110/130 BLD 3,2KG DRENADO": _i("Azeitona", 3.2, "kg"),
     "AZEITONAS VERDE AZAPA 110/130 BLD 3,2KG DRENADO": _i("Azeitona", 3.2, "kg"),
     "BATATA PALHA Extra ALMAVITA PCT 1KG": _i("Batata palha", 1, "kg"),
@@ -112,7 +117,7 @@ ALIMENTOS = {
     "CAFÉ EXPRESSO TRES CORAÇAOES SUPREMO C/10 UND": _i("Cápsula de café supremo", 1, "caixa"),
     "CHA CX C/ 10 SACHES SABORES VARIADOS TWINGS": _i("Chá em sachê", 1, "caixa"),
     "CHOC. AO LEITE CALEBAUTT CX 10 KG": _i("Chocolate", 10, "kg"),
-    "CHOC. CACAU EM PÓ 70% BARRY CALLEBAUT EXTRA BRUTE": _i("Cacau em pó", A_DEFINIR, "kg"),
+    "CHOC. CACAU EM PÓ 70% BARRY CALLEBAUT EXTRA BRUTE": _i("Cacau em pó", A_DEFINIR, "kg", "un"),
     "CHOC. COBERTURA FACIL SICAO BLEND BARRA 2,1KG meio amargo": _i("Chocolate", 2.1, "kg"),
     "CHOC. MEIO AMARGO CALEBAUTT CX 10 KG SICAO": _i("Chocolate", 10, "kg"),
     "CHOC. SICAO BRANCO 2,1KG (BARRA)": _i("Chocolate branco", 2.1, "kg"),
@@ -145,7 +150,7 @@ ALIMENTOS = {
     "MACARRAO CONCHIGLIONE GRANDE 500G (PAGANINI)": _i("Massa", 0.5, "kg"),
     "MACARRAO ESPAGUETE BARILLA 500G": _i("Massa", 0.5, "kg"),
     "MACARRAO ESPAGUETTI 8 PCT 500 GR (ADRIA OU RENATA)": _i("Massa", 0.5, "kg"),
-    "MACARRAO PAPARDELLE 201 (PAGANINI / DICECCO / COLAVITA)": _i("Massa", A_DEFINIR, "kg"),
+    "MACARRAO PAPARDELLE 201 (PAGANINI / DICECCO / COLAVITA)": _i("Massa", A_DEFINIR, "kg", "un"),
     "MACARRAO PENNE 500 GR ( RENATA)": _i("Massa", 0.5, "kg"),
     "MACARRAO PENNE BARILLA PCT 500G": _i("Massa", 0.5, "kg"),
     "MACARRAO RIGATONI BARILLA PCT 500G": _i("Massa", 0.5, "kg"),
@@ -206,13 +211,13 @@ ALIMENTOS = {
     "DAMASCO - 1 KG": _i("Damasco", 1, "kg"),
     "LEMON PEPPER PCT 500 GR(BOMBAY)": _i("Lemon pepper", 0.5, "kg"),
     "MOSTARDA EM GRÃO": _i("Mostarda em grão", 1, "pacote"),
-    "NOS MOSCADA EM BOLINHA PCT": _i("Noz-moscada", A_DEFINIR, "kg"),
+    "NOS MOSCADA EM BOLINHA PCT": _i("Noz-moscada", A_DEFINIR, "kg", "un"),
     "NOZES MARIPOSA EXTRA LITGH PCT 1 KG": _i("Nozes", 1, "kg"),
     "NUTS CARAMELIZADAS KG": _i("Nuts caramelizadas", 1, "kg"),
     "OREGANO PCT 1KG": _i("Orégano", 1, "kg"),
     "PAPRICA DEFUMADA PCT 500G": _i("Páprica defumada", 0.5, "kg"),
     "PIMENTA CALABRESA FLOCOS 500 GR": _i("Pimenta calabresa", 0.5, "kg"),
-    "PIMENTA PRETA EM GRAO": _i("Pimenta-do-reino", A_DEFINIR, "kg"),
+    "PIMENTA PRETA EM GRAO": _i("Pimenta-do-reino", A_DEFINIR, "kg", "un"),
     "QUINOA BRANCA": _i("Quinoa", 1, "pacote"),
     "QUINOA PRETA": _i("Quinoa", 1, "pacote"),
     "QUINOA VERMELHA": _i("Quinoa", 1, "pacote"),
@@ -325,10 +330,10 @@ ALIMENTOS = {
     "TRUTA FILÉ ESPALMADA 215gr a 280gr": _i("Truta", 1, "kg"),
     "TRUTA FILÉ ESPALMADA PORCIONADO ISCAS": _i("Truta", 1, "kg"),
     # LINGUIÇAS SPECIALLI / CANCIAN
-    "LINGUIÇA CAMPERA (SPECIALY)": _i("Linguiça campeira", A_DEFINIR, "kg"),
+    "LINGUIÇA CAMPERA (SPECIALY)": _i("Linguiça campeira", A_DEFINIR, "kg", "un"),
     "LINGUIÇA DE LIMAO SICILIANO (CANCIAN)": _i("Linguiça de limão siciliano", 1, "kg"),
     # A ficha técnica conta esta linguiça em unidade, e a planilha em kg.
-    "LINGUIÇA SUÍNA COM PROVOLONE PCT 400G (ARTESANAL ZR)": _i("Linguiça provolone", A_DEFINIR, "un"),
+    "LINGUIÇA SUÍNA COM PROVOLONE PCT 400G (ARTESANAL ZR)": _i("Linguiça provolone", 1, "un", "un"),
     "MIX DE LINGUIÇAS DO INTERIOR PCT 500G (CANCIAN)": _i("Mix de linguiças", 1, "kg"),
     # LEGUMES CONGELADOS
     "ALHO DESCASCADO CONGELADO KG": _i("Alho", 1, "kg"),
@@ -343,8 +348,8 @@ ALIMENTOS = {
     "MARACUJA C/ SEMENTE PCT": _i("Polpa de maracujá", 1, "kg"),
     "MIRTILIO PCT": _i("Mirtilo", 1, "pacote"),
     "MORANGO PCT": _i("Morango", A_DEFINIR, "kg"),
-    "SORVETE DE FRUTAS VERMELHAS BRUNO ALVES 5L": _i("Sorvete", A_DEFINIR, "kg"),
-    "SORVETE DE PISTACHE BRUNO ALVES 5L": _i("Sorvete", A_DEFINIR, "kg"),
+    "SORVETE DE FRUTAS VERMELHAS BRUNO ALVES 5L": _i("Sorvete", A_DEFINIR, "kg", "un"),
+    "SORVETE DE PISTACHE BRUNO ALVES 5L": _i("Sorvete", A_DEFINIR, "kg", "un"),
     # PAES
     "MINI PÃO DE BRIOCHE ASSADO SEPARADO": _i("Pão de hambúrguer", 1, "un"),
     "MINI PAO ITALIANO": _i("Pão", A_DEFINIR, "kg"),
@@ -364,7 +369,7 @@ ALIMENTOS = {
     "ALHO PORO UND": _i("Alho-poró", A_DEFINIR, "kg"),
     "ALHO ROXO": _i("Alho", 1, "kg"),
     "BANANA DA TERRA": _i("Banana-da-terra", 1, "caixa"),
-    "BANANA NANICA DUZIA (VERDE)": _i("Banana", A_DEFINIR, "kg"),
+    "BANANA NANICA DUZIA (VERDE)": _i("Banana", 20, "kg"),
     "BATATA ASTERIX KG PCT 25KG": _i("Batata", 1, "kg"),
     "BATATA INGLESA PCT 25KG": _i("Batata", 1, "kg"),
     "BERINGELA": _i("Berinjela", 1, "kg"),
@@ -388,7 +393,7 @@ ALIMENTOS = {
     "KIWI": _i("Kiwi", 1, "bandeja"),
     "LARANJA SACO (SACO 18 KG)": _i("Laranja", 18, "kg"),
     "LIMÃO SICILIANO KG": _i("Limão siciliano", 1, "kg"),
-    "LIMÃO TAITI KG": _i("Limão", A_DEFINIR, "kg"),
+    "LIMÃO TAITI KG": _i("Limão", 15, "kg"),
     "MAÇÃ GALA": _i("Maçã", 1, "kg"),
     "MAÇA VERDE": _i("Maçã verde", 1, "kg"),
     "MANDIOQUINHA KG (CX C/ 18KG)": _i("Mandioquinha", 1, "kg"),
@@ -399,7 +404,7 @@ ALIMENTOS = {
     "MANJERICÃO ROXO": _i("Manjericão", A_DEFINIR, "kg"),
     "MELANCIA": _i("Melancia", 1, "un"),
     "MILHO VERDE": _i("Milho verde", 1, "bandeja"),
-    "MORANGO CAIXA GRANDE COM 4 CAIXINHAS": _i("Morango", A_DEFINIR, "kg"),
+    "MORANGO CAIXA GRANDE COM 4 CAIXINHAS": _i("Morango", A_DEFINIR, "kg", "bandeja"),
     "OVOS BANDEJA C/ 30 UND (CX C/ 10 BDJ) - TAMANHO JUMBO/EXTRA": _i("Ovo", 300, "un"),
     "PEPINO JAPONÊS": _i("Pepino", 1, "kg"),
     "PIMENTÃO VERDE": _i("Pimentão", 1, "kg"),
@@ -588,7 +593,8 @@ def montar_plano(linhas: list[dict]) -> dict:
                 )
                 continue
 
-        insumo, fator, unidade = destino
+        insumo, fator, unidade, conta_em = (tuple(destino) + (None,))[:4]
+        unidade_contagem = conta_em or unidade_contagem
         if insumo in existentes:
             if existentes[insumo] != unidade:
                 problemas.append(
