@@ -2946,6 +2946,7 @@ with st.sidebar:
             st.warning(f"📅 Venda não lançada: {antes}{dias}")
             st.page_link(PG_VENDA, label="Lançar agora", icon=":material/point_of_sale:")
     st.caption(f"Hoje: {crud.hoje().strftime('%d/%m/%Y')}")
+    st.caption("Criado por Luis Felipe · © 2026 · Todos os direitos reservados")
 
 if st.session_state.pop("_sem_areas", False):
     st.info(

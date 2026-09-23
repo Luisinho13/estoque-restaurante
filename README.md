@@ -719,6 +719,8 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   de fora e aparece listada na importação. Desconto parcial e item de
   preço zero sem desconto (o fondue incluído na sequência) continuam
   contando
+- Autoria e direitos reservados no rodapé da barra lateral do app (no
+  sistema e na demonstração) e no fim deste README
 
 ### v0.10 — A contagem da planilha
 
