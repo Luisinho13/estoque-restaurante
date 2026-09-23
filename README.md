@@ -946,3 +946,7 @@ feito vira um número errado com cara de certo.
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
 - Sugestão de compra a partir dos dias de estoque restantes
+
+---
+
+<sub>Criado por Luis Felipe · © 2026 · Todos os direitos reservados. O código está público para consulta; uso, cópia ou redistribuição dependem de autorização do autor.</sub>
