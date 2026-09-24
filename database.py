@@ -218,11 +218,78 @@ def separar_comandos(script: str):
 
 # ---------- Conexão Postgres ----------
 
-# Abrir uma conexão por consulta custa caro num banco remoto (cada uma
-# refaz o TLS). O código chama get_connection()/close() dezenas de vezes,
-# então a conexão é reaproveitada por thread — cada sessão do Streamlit
-# roda na sua — e o close() vira um no-op.
-_local = threading.local()
+# Abrir uma conexão custa caro num banco remoto: TCP, TLS e login, várias
+# idas e voltas até o Neon antes da primeira consulta. O código chama
+# get_connection()/close() dezenas de vezes por clique, então a conexão é
+# reaproveitada e o close() vira um no-op.
+#
+# Ela é guardada por **sessão** do Streamlit (uma aba do navegador), não
+# por thread. A versão anterior guardava por thread achando que cada sessão
+# rodava na sua, mas o Streamlit sobe uma thread nova a cada clique: toda
+# interação abria uma conexão nova e largava a anterior. Fora do Streamlit
+# (scripts soltos) a chave é a thread, que ali vive o script inteiro.
+_conexoes = {}      # chave da sessão -> conexão psycopg
+_ultimo_uso = {}    # chave da sessão -> time.monotonic() do último uso
+_trava = threading.Lock()
+
+# Conexão parada é fechada por uma thread de faxina. Dois motivos: aba
+# fechada não avisa ninguém, e o Neon só hiberna — e para de gastar as horas
+# do plano gratuito — quando não há conexão aberta. Um minuto cobre os
+# cliques seguidos de quem está lançando; depois disso o banco fica livre.
+FECHAR_CONEXAO_PARADA_HA = 60     # segundos
+INTERVALO_DA_FAXINA = 20          # segundos
+_faxineira = None
+
+
+def _chave_da_sessao():
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        contexto = get_script_run_ctx(suppress_warning=True)
+        if contexto is not None:
+            return contexto.session_id
+    except Exception:
+        pass
+    return threading.get_ident()
+
+
+def _marcar_uso(chave):
+    _ultimo_uso[chave] = time.monotonic()
+
+
+def _faxina():
+    while True:
+        time.sleep(INTERVALO_DA_FAXINA)
+        with _trava:
+            _fechar_as_paradas(time.monotonic())
+
+
+def _iniciar_faxina():
+    """Sobe a thread de faxina na primeira conexão. Chamada com a trava na mão."""
+    global _faxineira
+    if _faxineira is None:
+        _faxineira = threading.Thread(target=_faxina, name="faxina-conexoes", daemon=True)
+        _faxineira.start()
+
+
+def _fechar_as_paradas(agora, exceto=None):
+    """Fecha conexões paradas há mais que o limite. Chamada com a trava na mão."""
+    for chave, ultimo in list(_ultimo_uso.items()):
+        if chave != exceto and agora - ultimo > FECHAR_CONEXAO_PARADA_HA:
+            conexao = _conexoes.pop(chave, None)
+            _ultimo_uso.pop(chave, None)
+            if conexao is not None:
+                try:
+                    conexao.close()
+                except Exception:
+                    pass
+
+# Conferir a conexão com um "SELECT 1" antes de cada consulta dobrava as idas
+# ao servidor: uma tela típica abre a conexão umas vinte vezes por clique, e
+# cada ida atravessa a internet até o Neon. A conexão só é conferida quando
+# ficou parada mais que isto — é depois de uma pausa que o servidor derruba
+# conexão ociosa ou hiberna. Usada há poucos segundos, ela está viva.
+CONFERIR_CONEXAO_PARADA_HA = 30   # segundos
 
 
 class _CursorPostgres:
@@ -261,10 +328,13 @@ class _CursorPostgres:
 class _ConexaoPostgres:
     """Conexão Postgres vestida com a interface do sqlite3."""
 
-    def __init__(self, conn):
+    def __init__(self, conn, chave=None):
         self._conn = conn
+        self._chave = chave
 
     def execute(self, sql, params=None):
+        if self._chave is not None:
+            _marcar_uso(self._chave)
         cursor = self._conn.cursor()
         if params:
             cursor.execute(traduzir_placeholders(sql), params)
@@ -317,11 +387,18 @@ def _conexao_postgres():
     import psycopg
     from psycopg.rows import dict_row
 
-    conn = getattr(_local, "conn", None)
+    chave = _chave_da_sessao()
+    with _trava:
+        conn = _conexoes.get(chave)
+        parada_ha = time.monotonic() - _ultimo_uso.get(chave, 0)
     if conn is not None and not conn.closed:
+        if parada_ha < CONFERIR_CONEXAO_PARADA_HA:
+            _marcar_uso(chave)
+            return _ConexaoPostgres(conn, chave)
         try:
             conn.execute("SELECT 1")
-            return _ConexaoPostgres(conn)
+            _marcar_uso(chave)
+            return _ConexaoPostgres(conn, chave)
         except Exception:
             # Conexão caiu (timeout do servidor, rede). Abre outra.
             try:
@@ -331,7 +408,8 @@ def _conexao_postgres():
 
     # Zera antes de tentar: se a reconexão falhar, o objeto morto não pode
     # continuar guardado, ou a próxima chamada tentaria usá-lo de novo.
-    _local.conn = None
+    with _trava:
+        _conexoes.pop(chave, None)
 
     ultimo_erro = None
     for tentativa in range(TENTATIVAS_DE_CONEXAO):
@@ -346,8 +424,11 @@ def _conexao_postgres():
         except Exception as erro:
             ultimo_erro = erro
             continue
-        _local.conn = conn
-        return _ConexaoPostgres(conn)
+        with _trava:
+            _conexoes[chave] = conn
+            _marcar_uso(chave)
+            _iniciar_faxina()
+        return _ConexaoPostgres(conn, chave)
 
     raise BancoIndisponivel(
         f"O banco não respondeu depois de {TENTATIVAS_DE_CONEXAO} tentativas."
@@ -520,6 +601,22 @@ COLUNAS_NOVAS = {
         "rendimento": "REAL",
     },
 }
+
+
+# O app.py garante as tabelas a cada execução, e o Streamlit executa o
+# app.py inteiro a cada clique: eram uns 25 comandos no Neon por clique só
+# para confirmar que nada mudou. Uma vez por processo basta — o esquema só
+# muda com código novo, e código novo sobe num processo novo (o app trava
+# até o reboot, ver app.py).
+_tabelas_garantidas = False
+
+
+def garantir_tabelas():
+    """criar_tabelas(), mas só na primeira vez em cada processo."""
+    global _tabelas_garantidas
+    if not _tabelas_garantidas:
+        criar_tabelas()
+        _tabelas_garantidas = True
 
 
 def criar_tabelas():

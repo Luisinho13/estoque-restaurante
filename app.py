@@ -73,7 +73,7 @@ try:
     # O spinner existe para a espera não ser uma tela em branco: acordar o
     # banco leva alguns segundos, e sem sinal nenhum parece travamento.
     with st.spinner("Conectando ao banco de dados…"):
-        database.criar_tabelas()  # garante que as tabelas existem ao abrir o app
+        database.garantir_tabelas()  # uma vez por processo, não a cada clique
 except database.BancoIndisponivel:
     st.title("📦 Controle de Estoque")
     st.error(
