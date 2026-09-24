@@ -37,6 +37,7 @@ AREAS = {
     "nf_manual": "Lançar Nota Fiscal (manual)",
     "zig": "Importar Vendas (PDV)",
     "venda": "Lançar Venda do Dia",
+    "producao": "Lançar Produção",
     "contagem": "Contagem Física",
 }
 

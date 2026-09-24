@@ -57,8 +57,11 @@ PRIMEIRA_SECAO_DE_ALIMENTOS = "ALIMENTOS"
 
 # A "Medida" da planilha, por extenso. É o que aparece na tela de
 # contagem, ao lado do campo, para quem conta saber em que unidade digitar.
+# O chopp ("BR", barril na planilha) é contado em litro: o barril aberto
+# está pela metade, e barril inteiro não diz quanto sobrou. Pedido do
+# usuário em 24/09/2026.
 MEDIDAS = {
-    "BR": "barril", "GF": "garrafa", "GRF": "garrafa", "GR": "garrafa",
+    "BR": "l", "GF": "garrafa", "GRF": "garrafa", "GR": "garrafa",
     "GF / DS": "garrafa", "GF/DS": "garrafa", "GF/DF": "garrafa",
     "LT": "lata", "BX": "caixa", "CX": "caixa", "SC": "saco", "VD": "vidro",
     "PCT": "pacote", "PT": "pacote", "BLD": "balde", "GL": "galão",
@@ -563,16 +566,38 @@ def montar_plano(linhas: list[dict]) -> dict:
     - 'insumos_novos': {nome: unidade} dos insumos que ainda não existem;
     - 'a_definir': linhas cujo fator depende de um peso que falta;
     - 'problemas': o que impede a importação (linha de alimento sem
-      mapeamento, unidade que não bate com a do insumo já cadastrado).
+      mapeamento, unidade que não bate com a do insumo já cadastrado);
+    - 'unidades_a_corrigir': {insumo: (unidade atual, unidade nova)} dos
+      insumos cuja unidade mudou na planilha e que ainda não têm nenhum
+      histórico, então podem trocar de unidade sem estragar nada.
     """
     conn = get_connection()
     existentes = {
         linha["nome"]: linha["unidade_medida"]
         for linha in conn.execute("SELECT nome, unidade_medida FROM insumos").fetchall()
     }
+    # Insumo com qualquer número gravado na unidade antiga — compra,
+    # contagem, produção, ficha, fator de nota fiscal — não pode trocar de
+    # unidade: 2 barris virariam 2 litros. Sem nada disso, a troca é só o
+    # rótulo, e é o caso do chopp, que mudou de barril para litro antes de
+    # o sistema entrar em uso.
+    com_historico = {
+        linha["nome"] for linha in conn.execute(
+            """SELECT i.nome FROM insumos i WHERE
+                   EXISTS (SELECT 1 FROM compras x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM contagens_fisicas x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes_consumo x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM ficha_tecnica x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM ficha_producao x
+                           WHERE x.insumo_id = i.id OR x.producao_id = i.id)
+                OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)"""
+        ).fetchall()
+    }
     conn.close()
 
     itens, novos, a_definir, problemas, ignoradas = [], {}, [], [], []
+    a_corrigir = {}
     for linha in linhas:
         unidade_contagem = _unidade_de_contagem(linha["medida"])
         k = chave(linha["descricao"])
@@ -596,7 +621,14 @@ def montar_plano(linhas: list[dict]) -> dict:
         insumo, fator, unidade, conta_em = (tuple(destino) + (None,))[:4]
         unidade_contagem = conta_em or unidade_contagem
         if insumo in existentes:
-            if existentes[insumo] != unidade:
+            if existentes[insumo] != unidade and insumo not in com_historico:
+                anterior = a_corrigir.setdefault(insumo, (existentes[insumo], unidade))
+                if anterior[1] != unidade:
+                    problemas.append(
+                        f"'{insumo}' aparece em '{anterior[1]}' e em '{unidade}' na planilha."
+                    )
+                    continue
+            elif existentes[insumo] != unidade:
                 problemas.append(
                     f"'{linha['descricao']}' vai para '{insumo}', que está cadastrado em "
                     f"'{existentes[insumo]}', mas o fator foi pensado em '{unidade}'."
@@ -627,6 +659,7 @@ def montar_plano(linhas: list[dict]) -> dict:
         "a_definir": a_definir,
         "ignoradas": ignoradas,
         "problemas": problemas,
+        "unidades_a_corrigir": a_corrigir,
     }
 
 
@@ -647,6 +680,10 @@ def aplicar_plano(plano: dict) -> dict:
             conn.execute(
                 "INSERT INTO insumos (nome, unidade_medida, estoque_minimo) VALUES (?, ?, 0)",
                 (nome, unidade),
+            )
+        for nome, (_, unidade) in plano.get("unidades_a_corrigir", {}).items():
+            conn.execute(
+                "UPDATE insumos SET unidade_medida = ? WHERE nome = ?", (unidade, nome)
             )
         ids = {
             linha["nome"]: linha["id"]
@@ -689,6 +726,7 @@ def aplicar_plano(plano: dict) -> dict:
     conn.close()
     return {
         "insumos_criados": len(plano["insumos_novos"]),
+        "unidades_corrigidas": len(plano.get("unidades_a_corrigir", {})),
         "itens_criados": criados,
         "itens_atualizados": atualizados,
     }

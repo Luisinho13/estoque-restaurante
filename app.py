@@ -845,7 +845,8 @@ def pagina_dashboard():
 def pagina_painel():
     st.title("📊 Painel de Estoque")
     st.caption(
-        "Estoque teórico atual de cada insumo, calculado a partir de compras e vendas."
+        "Estoque teórico atual de cada insumo, calculado a partir de compras, "
+        "produções e vendas."
     )
 
     insumos = listar_insumos()
@@ -853,9 +854,20 @@ def pagina_painel():
         st.info("Nenhum insumo cadastrado ainda. Vá em 'Insumos'.")
         return
 
+    mostrar = st.segmented_control(
+        "Mostrar", ["Todos", "Crus", "Produções"], default="Todos", key="painel_tipo",
+    ) or "Todos"
     dados = crud.calcular_estoque_todos_insumos()
+    if mostrar != "Todos":
+        tipo = "producao" if mostrar == "Produções" else "cru"
+        dados = [d for d in dados if d["tipo"] == tipo]
+    if not dados:
+        st.info("Nenhum insumo desse tipo.")
+        return
     df = pd.DataFrame(dados)
+    df["tipo"] = df["tipo"].map({"cru": "Cru", "producao": "Produção"})
     df = df.rename(columns={
+        "tipo": "Tipo",
         "insumo": "Insumo",
         "unidade_medida": "Unidade",
         "estoque_minimo": "Estoque mínimo",
@@ -879,7 +891,7 @@ def pagina_painel():
 
     st.divider()
     st.caption(
-        "Excluir um insumo diretamente daqui apaga também ficha técnica, "
+        "Excluir um insumo diretamente daqui apaga também ficha técnica, produções, "
         "compras e contagens físicas ligadas a ele. Não tem como desfazer."
     )
 
@@ -900,7 +912,7 @@ def pagina_painel():
     pendente = st.session_state.get("painel_excluir_pendente")
     if pendente:
         st.warning(
-            f"⚠️ Excluir **{pendente}** apaga também ficha técnica, compras "
+            f"⚠️ Excluir **{pendente}** apaga também ficha técnica, produções, compras "
             f"e contagens físicas ligadas a ele. Não tem como desfazer."
         )
         col1, col2 = st.columns(2)
@@ -1188,6 +1200,15 @@ def pagina_insumos():
     st.subheader("Cadastrar novo insumo")
     with st.form("form_insumo"):
         nome = st.text_input("Nome do insumo")
+        tipo = st.radio(
+            "Tipo", list(crud.TIPOS_DE_INSUMO), horizontal=True,
+            format_func=crud.TIPOS_DE_INSUMO.get,
+            help=(
+                "Cru é o que se compra e entra pela nota. Produção é o que a "
+                "cozinha faz (molho, base, carne porcionada): entra pela tela "
+                "Lançar Produção e tira do estoque os ingredientes da receita."
+            ),
+        )
         unidade = st.selectbox("Unidade de medida", ["kg", "g", "l", "ml", "un"])
         minimo = st.number_input("Estoque mínimo", min_value=0.0, step=0.5)
         enviado = st.form_submit_button("Cadastrar")
@@ -1195,8 +1216,11 @@ def pagina_insumos():
     if enviado:
         if nome:
             try:
-                crud.cadastrar_insumo(nome, unidade, minimo)
-                st.success(f"Insumo '{nome}' cadastrado!")
+                crud.cadastrar_insumo(nome, unidade, minimo, tipo)
+                recado = f"Insumo '{nome}' cadastrado!"
+                if tipo == "producao":
+                    recado += " Agora cadastre a receita dele em Ficha Técnica."
+                st.success(recado)
             except Exception as e:
                 st.error(f"Erro: {e}")
         else:
@@ -1209,13 +1233,16 @@ def pagina_insumos():
         return
 
     st.divider()
+    _crus_e_producoes()
+
+    st.divider()
     _estoques_minimos(insumos_existentes)
 
     st.divider()
     st.subheader("Excluir insumo")
     st.caption(
         "⚠️ Isso apaga o insumo e todo o histórico ligado a ele "
-        "(ficha técnica, compras e contagens). Não tem como desfazer."
+        "(ficha técnica, produções, compras e contagens). Não tem como desfazer."
     )
 
     insumo_excluir = st.selectbox("Selecione o insumo para excluir", insumos_existentes)
@@ -1228,6 +1255,81 @@ def pagina_insumos():
         except Exception as e:
             st.error(f"Erro: {e}")
 
+
+def _crus_e_producoes():
+    """As duas listas lado a lado e a troca de tipo de um insumo."""
+    st.subheader("Crus e produções")
+    st.caption(
+        "A venda desconta o que está na ficha do prato. Se o prato leva um "
+        "molho, sai o molho; os ingredientes do molho saem quando a produção "
+        "dele é lançada."
+    )
+    tipos = crud.tipos_dos_insumos()
+    unidades = unidades_dos_insumos()
+    producoes = crud.listar_producoes()
+    crus = sorted(n for n, t in tipos.items() if t == "cru")
+
+    aba_crus, aba_producoes = st.tabs(
+        [f"Crus ({len(crus)})", f"Produções ({len(producoes)})"]
+    )
+    with aba_crus:
+        st.dataframe(
+            pd.DataFrame([{"Insumo": n, "Unidade": unidades[n]} for n in crus]),
+            hide_index=True, width="stretch", height=300,
+        )
+    with aba_producoes:
+        if not producoes:
+            st.info("Nenhuma produção cadastrada ainda.")
+        else:
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Produção": p["nome"],
+                        "Unidade": p["unidade_medida"],
+                        "1 receita rende": p["rendimento"],
+                        "Itens na receita": p["itens_na_ficha"],
+                    }
+                    for p in producoes
+                ]),
+                hide_index=True, width="stretch", height=300,
+                column_config={
+                    "1 receita rende": st.column_config.NumberColumn(format="%.3f"),
+                },
+            )
+            sem_receita = [p["nome"] for p in producoes if not p["itens_na_ficha"]]
+            if sem_receita:
+                st.warning(
+                    "Sem receita cadastrada, e por isso fora da tela de produção: "
+                    + ", ".join(sem_receita) + ".",
+                    icon=":material/receipt_long:",
+                )
+
+    with st.expander("Mudar um insumo de cru para produção, ou o contrário"):
+        nome = st.selectbox("Insumo", sorted(tipos), key="tipo_insumo_nome")
+        atual = tipos[nome]
+        st.caption(f"Hoje: **{crud.TIPOS_DE_INSUMO[atual]}**.")
+        novo = "cru" if atual == "producao" else "producao"
+        if novo == "cru":
+            st.warning(
+                "Voltar para cru apaga a receita de produção dele. As produções "
+                "já lançadas ficam no histórico.",
+            )
+        if st.button(f"Marcar como {crud.TIPOS_DE_INSUMO[novo].lower()}",
+                     key="tipo_insumo_trocar"):
+            try:
+                crud.definir_tipo_do_insumo(nome, novo)
+            except Exception as e:
+                st.error(f"Erro: {e}")
+            else:
+                # O rerun redesenha as listas com o tipo novo; a confirmação
+                # vai pela sessão para não sumir junto.
+                st.session_state["tipo_insumo_recado"] = (
+                    f"'{nome}' agora é {crud.TIPOS_DE_INSUMO[novo].lower()}."
+                )
+                st.rerun()
+        recado = st.session_state.pop("tipo_insumo_recado", None)
+        if recado:
+            st.success(recado, icon=":material/check_circle:")
 
 # ---------- Cadastrar Prato ----------
 
@@ -1273,53 +1375,206 @@ def pagina_pratos():
 
 # ---------- Ficha Técnica ----------
 
-def pagina_ficha_tecnica():
-    st.title("📋 Ficha Técnica")
-    st.caption("Quanto de cada insumo é gasto para preparar 1 unidade do prato.")
+def _rotulos_de_insumo(excluir: str = None) -> dict[str, str]:
+    """Rótulo mostrado na lista -> nome do insumo.
 
-    pratos = listar_pratos()
-    insumos = listar_insumos()
+    A unidade vai no rótulo porque é o que evita digitar 150 onde a ficha
+    espera 0,15: quem escolhe "Queijo mussarela (kg)" sabe em que escrever.
+    """
+    tipos = crud.tipos_dos_insumos()
+    rotulos = {}
+    for nome, unidade in sorted(unidades_dos_insumos().items()):
+        if nome == excluir:
+            continue
+        marca = ", produção" if tipos.get(nome) == "producao" else ""
+        rotulos[f"{nome} ({unidade}{marca})"] = nome
+    return rotulos
 
-    if not pratos or not insumos:
-        st.info("Cadastre ao menos um prato e um insumo antes de continuar.")
-        return
 
-    unidades = unidades_dos_insumos()
+def _editor_de_ficha(itens, chave, rotulo_quantidade, excluir=None):
+    """Tabela da ficha com linhas que se acrescentam e apagam.
 
-    prato = st.selectbox("Prato", pratos)
-    num_insumos = st.number_input(
-        "Quantos insumos essa ficha técnica usa?",
-        min_value=1, max_value=10, value=1, step=1,
+    Devolve (linhas prontas para gravar, problemas). Linha inteira em branco
+    é ignorada — é a linha nova que o editor sempre oferece no fim.
+    """
+    rotulos = _rotulos_de_insumo(excluir)
+    por_nome = {nome: rotulo for rotulo, nome in rotulos.items()}
+    df = pd.DataFrame(
+        [{"Insumo": por_nome.get(i["insumo"]), "Quantidade": i["quantidade"]} for i in itens],
+        columns=["Insumo", "Quantidade"],
+    )
+    df["Quantidade"] = pd.to_numeric(df["Quantidade"], errors="coerce")
+    tabela = st.data_editor(
+        df,
+        key=chave,
+        num_rows="dynamic",
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Insumo": st.column_config.SelectboxColumn(
+                "Insumo", options=list(rotulos), required=True, width="large",
+            ),
+            "Quantidade": st.column_config.NumberColumn(
+                rotulo_quantidade, min_value=0.0, step=0.001, format="%.3f",
+            ),
+        },
     )
 
-    insumos_selecionados = [
-        st.selectbox(f"Insumo {i + 1}", insumos, key=f"ficha_insumo_{i}")
-        for i in range(int(num_insumos))
-    ]
+    linhas, problemas = [], []
+    for _, linha in tabela.iterrows():
+        rotulo = linha["Insumo"]
+        quantidade = linha["Quantidade"]
+        sem_insumo = rotulo is None or pd.isna(rotulo)
+        sem_quantidade = quantidade is None or pd.isna(quantidade)
+        if sem_insumo and sem_quantidade:
+            continue
+        if sem_insumo:
+            problemas.append(f"Uma linha tem quantidade {quantidade:g} mas nenhum insumo.")
+            continue
+        nome = rotulos[rotulo]
+        if sem_quantidade or quantidade <= 0:
+            problemas.append(f"'{nome}' está sem quantidade.")
+            continue
+        linhas.append({"insumo": nome, "quantidade": float(quantidade)})
 
-    with st.form("form_ficha"):
-        linhas = []
-        for i, insumo_i in enumerate(insumos_selecionados):
-            quantidade_i = st.number_input(
-                f"Quantidade de '{insumo_i}' usada por prato ({unidades[insumo_i]})",
-                min_value=0.0, step=0.01, key=f"ficha_qtd_{i}",
-            )
-            linhas.append((insumo_i, quantidade_i))
+    nomes = [l["insumo"] for l in linhas]
+    repetidos = sorted({n for n in nomes if nomes.count(n) > 1})
+    if repetidos:
+        problemas.append("Aparecem duas vezes: " + ", ".join(repetidos) + ". Deixe uma linha só.")
+    return linhas, problemas
 
-        enviado = st.form_submit_button("Salvar")
 
-    if enviado:
-        nomes_usados = [nome for nome, _ in linhas]
-        if len(set(nomes_usados)) != len(nomes_usados):
-            st.error("Cada insumo só pode aparecer uma vez na ficha técnica do prato.")
-        else:
-            try:
-                for insumo_i, quantidade_i in linhas:
-                    crud.definir_ficha_tecnica(prato, insumo_i, quantidade_i)
-                st.success(f"Ficha técnica de '{prato}' salva com {len(linhas)} insumo(s)!")
-            except Exception as e:
-                st.error(f"Erro: {e}")
+def _versao_do_editor(chave):
+    """Muda a cada gravação, para o editor recomeçar a partir do que ficou gravado."""
+    return st.session_state.get(f"{chave}_versao", 0)
 
+
+def _gravado(chave, recado):
+    st.session_state[f"{chave}_versao"] = _versao_do_editor(chave) + 1
+    st.session_state[f"{chave}_recado"] = recado
+    st.rerun()
+
+
+def _recado_gravado(chave):
+    recado = st.session_state.pop(f"{chave}_recado", None)
+    if recado:
+        st.success(recado, icon=":material/check_circle:")
+
+
+def pagina_ficha_tecnica():
+    st.title("📋 Ficha Técnica")
+    st.caption(
+        "A ficha do **prato** diz o que 1 porção vendida tira do estoque. A "
+        "ficha da **produção** diz o que 1 receita de molho, base ou porcionado "
+        "gasta — é ela que tira o cru do estoque, quando a produção é lançada."
+    )
+
+    tipo = st.segmented_control(
+        "Editar a ficha de", ["Prato", "Produção"], default="Prato", key="ficha_tipo",
+    ) or "Prato"
+
+    if tipo == "Prato":
+        _ficha_de_prato()
+    else:
+        _ficha_de_producao()
+
+
+def _ficha_de_prato():
+    pratos = listar_pratos()
+    if not pratos:
+        st.info("Cadastre um prato antes, na tela Pratos.")
+        return
+
+    prato = st.selectbox("Prato", pratos, key="ficha_prato")
+    chave = "ficha_prato_editor"
+    _recado_gravado(chave)
+
+    st.caption(
+        "Para acrescentar, use a linha em branco no fim da tabela. Para tirar, "
+        "marque a linha pela caixa da esquerda e apague com a lixeira. Nada "
+        "muda no estoque até você clicar em Gravar."
+    )
+    linhas, problemas = _editor_de_ficha(
+        crud.ficha_do_prato(prato),
+        f"{chave}_{prato}_{_versao_do_editor(chave)}",
+        "Por porção",
+    )
+
+    for problema in problemas:
+        st.error(problema)
+    if not linhas and not problemas:
+        st.warning(
+            "Ficha vazia: gravar assim faz a venda deste prato não descontar nada.",
+            icon=":material/warning:",
+        )
+
+    if st.button("💾 Gravar ficha do prato", type="primary", disabled=bool(problemas)):
+        try:
+            total = crud.salvar_ficha_do_prato(prato, linhas)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        _gravado(chave, f"Ficha de '{prato}' gravada com {total} insumo(s).")
+
+
+def _ficha_de_producao():
+    producoes = crud.listar_producoes()
+    if not producoes:
+        st.info(
+            "Nenhuma produção cadastrada. Cadastre o molho ou a base na tela "
+            "Insumos, com o tipo Produção, ou importe a planilha de produção."
+        )
+        return
+
+    nomes = [p["nome"] for p in producoes]
+    producao = st.selectbox("Produção", nomes, key="ficha_producao")
+    ficha = crud.ficha_da_producao(producao)
+    unidade = ficha["unidade_medida"]
+    chave = "ficha_producao_editor"
+    _recado_gravado(chave)
+
+    usado_em = crud.onde_o_insumo_e_usado(producao)
+    if usado_em:
+        st.caption("Usado em: " + ", ".join(usado_em) + ".")
+    else:
+        st.caption("Nenhum prato ou produção usa este item ainda.")
+
+    versao = _versao_do_editor(chave)
+    rendimento = st.number_input(
+        f"Quanto 1 receita rende ({unidade})",
+        min_value=0.0, step=0.1, format="%.3f",
+        value=float(ficha["rendimento"] or 0),
+        key=f"ficha_rendimento_{producao}_{versao}",
+        help=(
+            "Só serve para já vir preenchido na tela de produção. O que sai "
+            "do estoque é a receita abaixo vezes o número de receitas feitas."
+        ),
+    )
+    st.caption(
+        "Ingredientes de **1 receita**, na unidade de cada insumo. Uma produção "
+        "pode levar outra (o molho de queijo leva bechamel)."
+    )
+    linhas, problemas = _editor_de_ficha(
+        ficha["itens"], f"{chave}_{producao}_{versao}", "Por receita", excluir=producao,
+    )
+
+    if rendimento <= 0:
+        problemas.append("Informe quanto 1 receita rende.")
+    for problema in problemas:
+        st.error(problema)
+    if not linhas and not problemas:
+        st.warning(
+            "Receita vazia: sem ela, esta produção não pode ser lançada.",
+            icon=":material/warning:",
+        )
+
+    if st.button("💾 Gravar receita", type="primary", disabled=bool(problemas)):
+        try:
+            total = crud.salvar_ficha_da_producao(producao, linhas, rendimento)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        _gravado(chave, f"Receita de '{producao}' gravada com {total} ingrediente(s).")
 
 # ---------- Importar Ficha Técnica ----------
 
@@ -1337,8 +1592,14 @@ def _plano_da_ficha():
 def pagina_ficha_import():
     st.title("📥 Importar Ficha Técnica")
     st.caption(
-        "Envie as planilhas de ficha técnica e o sistema cadastra insumo, prato "
-        "e receita de uma vez. Nada é gravado antes de você conferir a prévia."
+        "Envie as planilhas de ficha técnica e o sistema cadastra insumo, prato, "
+        "produção e receita de uma vez. Nada é gravado antes de você conferir a prévia."
+    )
+    st.info(
+        "Depois da primeira importação, a fonte da verdade é o sistema: ajuste "
+        "fichas na tela Ficha Técnica. Importar de novo substitui a ficha de cada "
+        "prato e de cada produção da planilha, **inclusive o que foi editado à mão**.",
+        icon=":material/info:",
     )
 
     col1, col2 = st.columns(2)
@@ -1367,7 +1628,7 @@ def pagina_ficha_import():
     if not st.session_state.get("ficha_planilha_producao"):
         st.warning(
             "Sem a planilha de produção, os molhos e bases citados nas receitas "
-            "viram insumo em vez de serem abertos nos ingredientes de compra."
+            "viram insumo cru, sem receita, em vez de produção."
         )
 
     plano = _plano_da_ficha()
@@ -1375,13 +1636,14 @@ def pagina_ficha_import():
         st.error("Não encontrei nenhuma ficha técnica preenchida nessas planilhas.")
         return
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Pratos", len(plano["pratos"]),
                 delta=f"{len(plano['pratos_novos'])} novos", border=True)
     col2.metric("Insumos", len(plano["insumos"]),
                 delta=f"{len(plano['insumos_novos'])} novos", border=True)
-    col3.metric("Linhas de ficha", len(plano["fichas"]), border=True)
-    col4.metric("Pontos de atenção", len(plano["avisos"]), border=True)
+    col3.metric("Produções", len(plano["producoes"]), border=True)
+    col4.metric("Linhas de ficha", len(plano["fichas"]), border=True)
+    col5.metric("Pontos de atenção", len(plano["avisos"]), border=True)
 
     if plano["pratos_sem_ficha"]:
         st.subheader("Pratos do sistema que ficariam sem ficha")
@@ -1421,11 +1683,35 @@ def pagina_ficha_import():
             hide_index=True, width="stretch",
         )
 
+    with st.expander(f"🍳 {len(plano['producoes'])} produção(ões) com receita própria"):
+        if plano["viram_producao"]:
+            st.caption(
+                "Já existiam como insumo cru (a contagem criou) e passam a ser "
+                "produção: " + ", ".join(plano["viram_producao"]) + "."
+            )
+        st.dataframe(
+            pd.DataFrame([
+                {"Produção": p["nome"], "Unidade": p["unidade"],
+                 "1 receita rende": p["rendimento"], "Ingredientes": len(p["itens"]),
+                 "Aba": p["aba"]}
+                for p in plano["producoes"]
+            ]),
+            hide_index=True, width="stretch",
+        )
+        st.dataframe(
+            pd.DataFrame([
+                {"Produção": p["nome"], "Ingrediente": i["insumo"],
+                 "Por receita": i["quantidade"], "Unidade": plano["insumos"][i["insumo"]]}
+                for p in plano["producoes"] for i in p["itens"]
+            ]),
+            hide_index=True, width="stretch", height=300,
+        )
+
     with st.expander(f"🍽️ {len(plano['pratos_novos'])} prato(s) que serão criados"):
         st.dataframe(pd.DataFrame({"Prato": plano["pratos_novos"]}),
                      hide_index=True, width="stretch")
 
-    with st.expander(f"📋 {len(plano['fichas'])} linha(s) de ficha técnica"):
+    with st.expander(f"📋 {len(plano['fichas'])} linha(s) de ficha de prato"):
         st.dataframe(
             pd.DataFrame([
                 {"Prato": f["prato"], "Insumo": f["insumo"],
@@ -1464,7 +1750,7 @@ def pagina_ficha_import():
         )
 
     substituir = st.checkbox(
-        "Substituir a ficha atual dos pratos importados",
+        "Substituir a ficha atual dos pratos e das produções importados",
         value=True,
         help=(
             "Recomendado. Sem isso, um insumo que saiu da receita continuaria "
@@ -1481,8 +1767,9 @@ def pagina_ficha_import():
             st.error(f"Erro ao gravar: {e}")
             return
         recado = (
-            f"{feito['insumos']} insumo(s), {feito['pratos']} prato(s) e "
-            f"{feito['fichas']} linha(s) de ficha técnica cadastrados!"
+            f"{feito['insumos']} insumo(s), {feito['pratos']} prato(s), "
+            f"{feito['fichas']} linha(s) de ficha de prato e {feito['producoes']} "
+            f"produção(ões) com {feito['linhas_producao']} ingrediente(s) cadastrados!"
         )
         if feito["unidades"]:
             recado += f" {feito['unidades']} unidade(s) de medida corrigida(s)."
@@ -2318,6 +2605,17 @@ def _importar_planilha_de_contagem():
     if plano["problemas"]:
         st.error("A importação está bloqueada até resolver:\n\n- " + "\n- ".join(plano["problemas"]))
         return
+    if plano["unidades_a_corrigir"]:
+        st.info(
+            "Estes insumos mudam de unidade, porque a planilha passou a contá-los "
+            "de outro jeito. Nenhum deles tem compra, contagem nem ficha ainda, "
+            "então a troca não altera nenhum número: "
+            + ", ".join(
+                f"{nome} ({de} → {para})"
+                for nome, (de, para) in sorted(plano["unidades_a_corrigir"].items())
+            ),
+            icon=":material/straighten:",
+        )
     if plano["insumos_novos"]:
         with st.expander(f"Insumos que serão criados ({len(plano['insumos_novos'])})"):
             st.write(", ".join(
@@ -2343,6 +2641,7 @@ def _importar_planilha_de_contagem():
             return
         st.success(
             f"{resultado['insumos_criados']} insumo(s) criado(s), "
+            f"{resultado['unidades_corrigidas']} unidade(s) trocada(s), "
             f"{resultado['itens_criados']} linha(s) nova(s) e "
             f"{resultado['itens_atualizados']} atualizada(s).",
             icon=":material/check_circle:",
@@ -2629,8 +2928,10 @@ def _explicacao_da_conta():
             três destinos, e os três somam exatamente 100%:
 
             ```
-            disponível  =  estoque da contagem anterior + compras do período
-            disponível  =  usado (vendas × ficha técnica)
+            disponível  =  estoque da contagem anterior
+                         + compras e produções do período
+            disponível  =  usado (vendas × ficha do prato
+                                  + o que as produções gastaram)
                          + sobra (contagem atual)
                          + perda (o que falta para fechar)
             ```
@@ -2788,6 +3089,178 @@ def pagina_perdas():
     _explicacao_da_conta()
 
 
+# ---------- Lançar Produção ----------
+
+# Produzir é um movimento com dois lados: entra o molho, sai o que a receita
+# gasta. Quem lança diz quantas receitas fez — é isso que decide o cru que
+# sai — e confere quanto rendeu, que vem preenchido pelo rendimento da ficha.
+
+def pagina_producao():
+    st.title("🍳 Lançar Produção")
+    st.caption(
+        "Molho, base, carne porcionada: o que a cozinha produziu entra no "
+        "estoque, e os ingredientes da receita saem."
+    )
+
+    producoes = crud.listar_producoes()
+    com_receita = [p for p in producoes if p["itens_na_ficha"]]
+    if not com_receita:
+        st.info(
+            "Nenhuma produção com receita cadastrada. Cadastre a receita em "
+            "Ficha Técnica → Produção."
+        )
+        _historico_de_producao()
+        return
+
+    recado = st.session_state.pop("producao_recado", None)
+    if recado:
+        st.success(recado, icon=":material/check_circle:")
+
+    por_nome = {p["nome"]: p for p in com_receita}
+    col1, col2 = st.columns([3, 1])
+    producao = col1.selectbox("O que foi produzido", list(por_nome), key="producao_nome")
+    data = col2.date_input(
+        "Data", value=crud.hoje(), max_value=crud.hoje(), format="DD/MM/YYYY",
+        key="producao_data",
+    )
+    item = por_nome[producao]
+    unidade = item["unidade_medida"]
+
+    col1, col2 = st.columns(2)
+    receitas = col1.number_input(
+        "Quantas receitas", min_value=0.0, value=1.0, step=0.5, format="%.2f",
+        key="producao_receitas",
+        help="Meia receita é 0,5. É este número que decide o que sai do estoque.",
+    )
+    sugerido = round((item["rendimento"] or 0) * receitas, 3)
+    # A chave leva a produção e o número de receitas: trocar qualquer um dos
+    # dois recalcula a sugestão, em vez de manter o número da escolha anterior.
+    rendeu = col2.number_input(
+        f"Quanto rendeu ({unidade})", min_value=0.0, value=float(sugerido), step=0.5,
+        format="%.3f", key=f"producao_rendeu_{producao}_{receitas}",
+        help=(
+            f"Vem preenchido com o rendimento da ficha "
+            f"({item['rendimento'] or 0:g} {unidade} por receita). "
+            "Se pesou ou contou diferente, corrija."
+        ),
+    )
+    observacao = st.text_input("Observação (opcional)", key="producao_obs")
+
+    if receitas <= 0:
+        st.info("Informe quantas receitas foram feitas.")
+        _historico_de_producao()
+        return
+
+    impacto = crud.impacto_da_producao(producao, receitas)
+    estoques = {e["insumo"]: e for e in crud.calcular_estoque_todos_insumos()}
+    st.markdown(f"**Sai do estoque** ({receitas:g} receita(s) de {producao}):")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Insumo": i["insumo"],
+                "Sai": i["consumo"],
+                "Un.": i["unidade_medida"],
+                "Estoque agora": estoques.get(i["insumo"], {}).get("estoque_atual"),
+            }
+            for i in impacto
+        ]),
+        hide_index=True, width="stretch",
+        column_config={
+            "Sai": st.column_config.NumberColumn(format="%.3f"),
+            "Estoque agora": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+    st.markdown(f"**Entra no estoque:** {rendeu:g} {unidade} de {producao}.")
+
+    # Produção soma, não substitui: fazer duas levas no mesmo dia é normal.
+    # Por isso o clique duplo não é inofensivo aqui como é na venda, e a
+    # segunda leva do dia pede confirmação.
+    ja_lancado = crud.producoes_do_dia(producao, data.isoformat())
+    confirmado = True
+    if ja_lancado["levas"]:
+        st.warning(
+            f"Já há {ja_lancado['levas']} leva(s) de {producao} em "
+            f"{data.strftime('%d/%m/%Y')}, somando {ja_lancado['produzido']:g} {unidade}.",
+            icon=":material/content_copy:",
+        )
+        confirmado = st.checkbox("É outra leva, quero somar", key="producao_outra_leva")
+
+    if st.button("🍳 Lançar produção", type="primary",
+                 disabled=rendeu <= 0 or not confirmado):
+        try:
+            crud.registrar_producao(producao, receitas, rendeu, data.isoformat(), observacao)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+        else:
+            st.session_state["producao_recado"] = (
+                f"Lançado: {rendeu:g} {unidade} de {producao} em "
+                f"{data.strftime('%d/%m/%Y')}, gastando {receitas:g} receita(s)."
+            )
+            st.session_state.pop("producao_outra_leva", None)
+            st.rerun()
+
+    _historico_de_producao()
+
+
+def _historico_de_producao():
+    st.divider()
+    st.subheader("Produções dos últimos 30 dias")
+    hoje = crud.hoje()
+    levas = crud.producoes_no_periodo(
+        (hoje - datetime.timedelta(days=29)).isoformat(), hoje.isoformat()
+    )
+    if not levas:
+        st.caption("Nenhuma produção lançada no período.")
+        return
+
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Data": _data_br(l["data"]),
+                "Produção": l["producao"],
+                "Receitas": l["receitas"],
+                "Rendeu": l["quantidade_produzida"],
+                "Un.": l["unidade_medida"],
+                "Observação": l["observacao"],
+            }
+            for l in levas
+        ]),
+        hide_index=True, width="stretch",
+        column_config={
+            "Receitas": st.column_config.NumberColumn(format="%g"),
+            "Rendeu": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+
+    with st.expander("Ver o que uma leva gastou, ou apagar uma leva lançada errado"):
+        rotulos = {
+            f"{_data_br(l['data'])} · {l['producao']} · {l['quantidade_produzida']:g} "
+            f"{l['unidade_medida']} (nº {l['id']})": l["id"]
+            for l in levas
+        }
+        escolhida = st.selectbox("Leva", list(rotulos), key="producao_leva")
+        producao_id = rotulos[escolhida]
+        st.dataframe(
+            pd.DataFrame([
+                {"Insumo": c["insumo"], "Gastou": c["quantidade"], "Un.": c["unidade_medida"]}
+                for c in crud.consumo_da_producao(producao_id)
+            ]),
+            hide_index=True, width="stretch",
+            column_config={"Gastou": st.column_config.NumberColumn(format="%.3f")},
+        )
+        confirmar = st.checkbox(
+            "Apagar esta leva: o produzido sai do estoque e os ingredientes voltam",
+            key=f"producao_apagar_{producao_id}",
+        )
+        if st.button("Apagar leva", disabled=not confirmar, key="producao_apagar"):
+            try:
+                crud.excluir_producao(producao_id)
+            except Exception as e:
+                st.error(f"Erro: {e}")
+            else:
+                st.session_state["producao_recado"] = f"Leva apagada: {escolhida}."
+                st.rerun()
+
 # ---------- Navegação ----------
 
 PG_DASHBOARD = st.Page(
@@ -2826,6 +3299,10 @@ PG_NF_MANUAL = st.Page(
 )
 PG_VENDA = st.Page(
     pagina_venda, title="Lançar Venda do Dia", icon=":material/point_of_sale:", url_path="venda"
+)
+PG_PRODUCAO = st.Page(
+    pagina_producao, title="Lançar Produção", icon=":material/soup_kitchen:",
+    url_path="producao",
 )
 PG_ZIG = st.Page(
     pagina_zig, title="Importar Vendas (PDV)", icon=":material/receipt:", url_path="vendas-pdv"
@@ -2871,6 +3348,7 @@ PAGINAS_POR_AREA = {
     "nf_manual": PG_NF_MANUAL,
     "zig": PG_ZIG,
     "venda": PG_VENDA,
+    "producao": PG_PRODUCAO,
     "contagem": PG_CONTAGEM,
     "perdas": PG_PERDAS,
 }
@@ -2886,10 +3364,9 @@ if _liberadas("dashboard", "painel", "saida", "perdas"):
 CADASTROS = ("insumos", "pratos", "ficha", "ficha_import", "itens_contagem")
 if _liberadas(*CADASTROS):
     menu["Cadastros"] = _liberadas(*CADASTROS)
-if _liberadas("compra", "nf_manual", "nfe", "zig", "venda", "contagem"):
-    menu["Lançamentos"] = _liberadas(
-        "compra", "nf_manual", "nfe", "zig", "venda", "contagem"
-    )
+LANCAMENTOS = ("compra", "nf_manual", "nfe", "zig", "venda", "producao", "contagem")
+if _liberadas(*LANCAMENTOS):
+    menu["Lançamentos"] = _liberadas(*LANCAMENTOS)
 
 menu["Conta"] = [PG_MINHA_CONTA]
 if E_ADMIN:

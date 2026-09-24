@@ -16,9 +16,13 @@ devolve sempre um objeto com a mesma interface — `execute`, `commit`,
 ficam todas neste arquivo.
 
 Estrutura:
-- insumos: cada ingrediente/produto controlado no estoque
+- insumos: cada ingrediente/produto controlado no estoque. O `tipo` separa
+  o cru (comprado) da produção (molho, base, porcionado feito na cozinha)
 - pratos: itens do cardápio
-- ficha_tecnica: quanto de cada insumo um prato consome
+- ficha_tecnica: quanto de cada insumo um prato consome (cru ou produção)
+- ficha_producao: quanto de cada insumo uma receita de produção consome
+- producoes: cada leva produzida na cozinha (entrada do item produzido)
+- producoes_consumo: o que cada leva gastou, congelado no lançamento
 - compras: entradas de estoque (o que foi comprado)
 - vendas_diarias: quantos de cada prato foram vendidos em um dia
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
@@ -368,7 +372,9 @@ ESQUEMA = """
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT NOT NULL UNIQUE,
             unidade_medida TEXT NOT NULL,      -- ex: kg, g, l, ml, un
-            estoque_minimo REAL NOT NULL DEFAULT 0
+            estoque_minimo REAL NOT NULL DEFAULT 0,
+            tipo TEXT NOT NULL DEFAULT 'cru',  -- 'cru' (comprado) ou 'producao' (feito na cozinha)
+            rendimento REAL                    -- produção: quanto 1 receita rende, na unidade do insumo
         );
 
         CREATE TABLE IF NOT EXISTS pratos (
@@ -382,6 +388,30 @@ ESQUEMA = """
             insumo_id INTEGER NOT NULL REFERENCES insumos(id),
             quantidade_por_prato REAL NOT NULL,  -- quanto do insumo 1 unidade do prato consome
             UNIQUE(prato_id, insumo_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS ficha_producao (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            producao_id INTEGER NOT NULL REFERENCES insumos(id),  -- o molho, a base...
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),    -- o que vai nele (cru ou outra produção)
+            quantidade_por_receita REAL NOT NULL,                 -- quanto 1 receita gasta desse insumo
+            UNIQUE(producao_id, insumo_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS producoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),    -- o que foi produzido
+            data TEXT NOT NULL,                                   -- formato YYYY-MM-DD
+            receitas REAL NOT NULL,                               -- quantas receitas da ficha foram feitas
+            quantidade_produzida REAL NOT NULL,                   -- quanto rendeu, na unidade do insumo
+            observacao TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS producoes_consumo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            producao_id INTEGER NOT NULL REFERENCES producoes(id),
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+            quantidade REAL NOT NULL                              -- quanto essa leva gastou do insumo
         );
 
         CREATE TABLE IF NOT EXISTS compras (
@@ -484,6 +514,10 @@ COLUNAS_NOVAS = {
     },
     "compras": {
         "numero_nota": "TEXT",
+    },
+    "insumos": {
+        "tipo": "TEXT NOT NULL DEFAULT 'cru'",
+        "rendimento": "REAL",
     },
 }
 

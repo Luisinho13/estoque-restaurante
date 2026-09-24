@@ -14,10 +14,11 @@ módulo existe em vez de um `pandas.read_excel` direto:
    planilha discorda.
 
 2. **As fichas têm dois níveis.** Um prato consome "Molho queijo", que é uma
-   receita da planilha de Produção, não algo que se compra. Como o banco é
-   plano (prato → insumo), a gente *explode* a subreceita: a quantidade usada
-   é dividida pelo rendimento do lote e multiplicada pelos ingredientes dele.
-   Assim o consumo cai em cima do que realmente entra pela nota fiscal.
+   receita da planilha de Produção, não algo que se compra. Cada receita de
+   produção vira um item de estoque do tipo produção, com a própria ficha:
+   a venda do prato desconta o molho, e o lançamento da produção do molho
+   desconta o leite e o parmesão. (Até 23/09/2026 a receita era *explodida*
+   no cru e a venda tirava o leite direto; o usuário pediu a separação.)
 
 3. **Os nomes de ingrediente são texto livre.** São mais de 200 grafias, com
    erro de digitação ("katchup", "marshwmelow", "abobobrinha") e com o mesmo
@@ -53,11 +54,11 @@ COL_PESO_LIQUIDO = 5      # E
 COL_PORCOES = 3           # C, na linha 29
 COL_VALOR = 10            # J — rendimento e custo
 
-# Abaixo disso o rendimento declarado é menor que a soma dos ingredientes a
-# ponto de não ser redução de cozimento, e sim engano de digitação. "Farofa"
-# declara render 0,03 kg a partir de 1,53 kg. Explodir por esse número
-# multiplicaria o consumo por 50.
+# Fora desta faixa, o rendimento declarado não é redução de cozimento nem
+# água absorvida, e sim engano de digitação. "Farofa" declara render 0,03 kg
+# a partir de 1,53 kg; "Molho Mostarda", 26 kg a partir de 0,64 kg.
 RENDIMENTO_MINIMO_PLAUSIVEL = 0.6
+RENDIMENTO_MAXIMO_PLAUSIVEL = 1.3
 
 
 def _limpa(valor) -> str | None:
@@ -330,6 +331,9 @@ EM_LITRO = {
 # "Molho de Queijo" e viraria um insumo que ninguém compra.
 APELIDOS_DE_RECEITA = {
     "molho ao sugo": "Molho sugo",
+    # "Molho de tomate" é o nome técnico escrito dentro da aba "Molho sugo"
+    # (e, por erro de cópia, também dentro de "Molho Mostarda").
+    "molho de tomate": "Molho sugo",
     "molho de mostarda": "Molho Mostarda",
     "molho queijo": "Molho de Queijo",
     "molho pesto": "Pesto",
@@ -351,6 +355,60 @@ APELIDOS_DE_RECEITA = {
     "aioli de pimenta do reino": "Aioli de Pimenta de cheiro",
     "molho de alho": "Aioli de Alho",
     "molho de frutas vermelhas": "Geleia Frutas Vermelha",
+}
+
+# Ingrediente que a receita cita mas que não é estoque: água da torneira
+# entraria no painel com saldo negativo para sempre.
+SEM_ESTOQUE = {"agua"}
+
+# Nome de cada produção no sistema, pela aba da planilha de Produção
+# (comparada por `chave()`). O campo "nome técnico" das abas não serve: foi
+# copiado de uma aba para a outra, e "Molho Mostarda" se chama "Molho de
+# tomate" por dentro. Onde a contagem de 23/09 já criou o item, o nome é o
+# mesmo dela, para a contagem cair direto na produção.
+NOMES_DE_PRODUCAO = {
+    "molho mostarda": "Molho de mostarda",
+    "molho sugo": "Molho ao sugo",                  # já existe pela contagem
+    "molho madeira": "Molho madeira",
+    "molho de strogonoff": "Molho de strogonoff",
+    "bechamel": "Molho bechamel",
+    "pesto": "Pesto",                               # já existe pela contagem
+    "molho maracuja": "Molho de maracujá",          # já existe pela contagem
+    "molho de queijo": "Molho de queijo",
+    "base de risoto": "Base de risoto",
+    "p parmeggiana carne": "Parmegiana de carne empanada",
+    "p parmeggiana frango": "Parmegiana de frango empanada",
+    "geleia frutas vermelha": "Geleia de frutas vermelhas",
+    "molho cheddar": "Molho cheddar",
+    "petit four": "Petit four",
+    "molho ceaser": "Molho caesar",
+    "molho steak tartare": "Molho steak tartare",
+    "mix de cogumelos": "Mix de cogumelos",
+    "caldo de legumes": "Caldo de legumes",
+    "vinagrete": "Vinagrete",
+    "brownie": "Brownie",
+    "cocada cremosa": "Cocada cremosa",
+    "aioli de limao": "Aioli de limão",
+    "aioli de pimenta de cheiro": "Aioli de pimenta de cheiro",
+    "aioli de alho": "Aioli de alho",
+    "queijo fonfue": "Fondue de queijo",
+    "fondue de chocolate": "Fondue de chocolate",
+    "fondue doce de leite": "Fondue de doce de leite",
+    "brigadeiro com pacoquinha": "Brigadeiro com paçoquinha",
+    "mousse de limao crocante": "Mousse de limão crocante",
+    "frango gourmet": "Frango gourmet",
+    # A ficha leva carne seca: é o "com carne seca" da contagem.
+    "bolinho de abobora": "Bolinho de abóbora com carne seca",
+    "dadinho de tapioca": "Dadinho de tapioca",     # já existe pela contagem
+    "farofa": "Farofa",
+}
+
+# Produções que o prato cita por peça, não por peso ("1 und" de
+# parmegiana, "1 unidade" de dadinho). Nelas o rendimento de 1 receita é o
+# número de porções da aba, e não o peso.
+PRODUCOES_EM_PORCAO = {
+    "p parmeggiana carne", "p parmeggiana frango",
+    "dadinho de tapioca", "bolinho de abobora",
 }
 
 APELIDOS_INCERTOS = {
@@ -474,9 +532,27 @@ def _ler_aba(ws) -> dict | None:
 
 # ---------- Montagem do plano ----------
 
+def _e_producao(receita: dict) -> bool:
+    return (receita["tipo"] or "").lower().startswith("produ")
+
+
+def nome_da_producao(receita: dict) -> str:
+    """Nome do item produzido no sistema, a partir da aba da planilha."""
+    nome = NOMES_DE_PRODUCAO.get(chave(receita["aba"]))
+    if nome:
+        return nome
+    aba = receita["aba"].strip()
+    return aba[:1].upper() + aba[1:]
+
+
 def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
                  de_para_pratos: dict[str, str] | None = None) -> dict:
     """Transforma as receitas lidas no que precisa ser gravado.
+
+    Cada aba de produção vira um item de estoque do tipo produção, com a
+    própria ficha (o que 1 receita gasta) e o rendimento. Cada aba de prato
+    vira a ficha do prato, citando a produção pelo nome quando a receita
+    leva um molho ou uma base — sem abrir nos ingredientes.
 
     `de_para_pratos` liga o nome da aba ao nome do prato que já existe no
     sistema (que é o nome da Zig, e é por ele que a venda encontra o prato).
@@ -485,167 +561,113 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
     de_para_pratos = de_para_pratos or {}
     avisos = []
 
-    # Só receita de produção serve de subreceita. Aba de prato não entra aqui
-    # de propósito: várias delas são só o "extra" do cardápio e citam o próprio
-    # nome como ingrediente ("Bombom de Alcatra" consome "Bombom de Alcatra"
-    # 0,18 kg). Se elas valessem como subreceita, esse 0,18 seria multiplicado
-    # por si mesmo e a alcatra do prato cairia para 0,032 kg.
-    catalogo = _indexar(receitas_producao)
-    for k, v in _indexar([r for r in receitas_prato
-                          if (r["tipo"] or "").lower().startswith("produ")]).items():
-        catalogo.setdefault(k, v)
-
-    insumos = {}   # nome do insumo -> unidade
-    fichas = []    # (prato, insumo, quantidade por porção)
-    ja_montados = {}  # chave do prato -> aba que o montou, para pegar aba repetida
-
-    for receita in receitas_prato:
-        escolhidos = de_para_pratos.get(receita["aba"])
-        if isinstance(escolhidos, str):
-            escolhidos = [escolhidos]
-
-        # Uma aba marcada como Produção só vira prato se você disse que ela é
-        # um: o "Caldinho de Batata" é vendido, mesmo estando marcado assim.
-        if not escolhidos and (receita["tipo"] or "").lower().startswith("produ"):
-            avisos.append(
-                f"A aba '{receita['aba']}' está marcada como Produção na planilha "
-                "de pratos, então virou só ingrediente de outras fichas, não um "
-                "prato vendido."
-            )
-            continue
-
-        porcoes = receita["porcoes"] or 1.0
-        consumo = {}
-        _explodir(receita, 1.0, catalogo, consumo, [id(receita)], avisos)
-
-        for prato in escolhidos or [receita["nome_venda"]]:
-            # Duas abas descrevem "Barriga de porco" de jeitos diferentes. Vale
-            # a primeira: sem isso as duas gravariam no mesmo prato e a segunda
-            # apagaria a ficha da primeira sem ninguém ver.
-            if chave(prato) in ja_montados:
-                avisos.append(
-                    f"As abas '{ja_montados[chave(prato)]}' e '{receita['aba']}' viram "
-                    f"o mesmo prato ('{prato}'). Usei a primeira e ignorei a segunda."
-                )
-                continue
-            ja_montados[chave(prato)] = receita["aba"]
-
-            for insumo, quantidade in consumo.items():
-                insumos[insumo] = unidade_do_insumo(insumo)
-                por_porcao = round(quantidade / porcoes, 6)
-                corrigida = QUANTIDADES_CORRIGIDAS.get((chave(prato), chave(insumo)))
-                if corrigida is not None and corrigida != por_porcao:
-                    avisos.append(
-                        f"'{prato}' consome {por_porcao:g} de '{insumo}' na planilha; "
-                        f"usei {corrigida:g}, a quantidade confirmada pela cozinha."
-                    )
-                    por_porcao = corrigida
-                fichas.append({
-                    "prato": prato,
-                    "insumo": insumo,
-                    "quantidade": por_porcao,
-                    "aba": receita["aba"],
-                })
-
-    # O que já existe no banco não precisa ser criado de novo.
     conn = get_connection()
     unidade_atual = {
         d["nome"]: d["unidade_medida"]
         for d in conn.execute("SELECT nome, unidade_medida FROM insumos").fetchall()
     }
-    ja_tem_insumo = set(unidade_atual)
+    tipo_atual = {
+        d["nome"]: d["tipo"]
+        for d in conn.execute("SELECT nome, tipo FROM insumos").fetchall()
+    }
     ja_tem_prato = {d["nome"] for d in conn.execute("SELECT nome FROM pratos").fetchall()}
+    # Insumo que a contagem conta tem a unidade que o fator da linha da
+    # contagem pressupõe. Trocar a unidade dele aqui estragaria a contagem.
+    contados = {
+        d["nome"] for d in conn.execute(
+            """SELECT DISTINCT i.nome FROM itens_contagem ic
+               JOIN insumos i ON i.id = ic.insumo_id"""
+        ).fetchall()
+    }
     conn.close()
 
-    # Insumo que já existe, mas contado numa unidade diferente da que a ficha
-    # usa. Fica invisível e estraga a conta: a ficha gasta 0,06 kg de pão e o
-    # painel mostra o saldo em unidades.
-    divergentes = [
-        {"insumo": nome, "atual": unidade_atual[nome], "planilha": unidade}
-        for nome, unidade in insumos.items()
-        if nome in unidade_atual and unidade_atual[nome] != unidade
-    ]
+    # O que é produção: toda aba da planilha de Produção e as abas da de
+    # pratos marcadas como Produção que você não ligou a um prato vendido.
+    # Aba de prato comum não entra de propósito: várias delas são só o
+    # "extra" do cardápio e citam o próprio nome como ingrediente ("Bombom
+    # de Alcatra" consome "Bombom de Alcatra" 0,18 kg).
+    receitas_de_producao = list(receitas_producao)
+    for receita in receitas_prato:
+        if _e_producao(receita) and not de_para_pratos.get(receita["aba"]):
+            receitas_de_producao.append(receita)
+            avisos.append(
+                f"A aba '{receita['aba']}' está marcada como Produção na planilha "
+                "de pratos, então virou item de produção, não um prato vendido."
+            )
+    catalogo = _indexar(receitas_de_producao)
 
-    pratos = sorted({f["prato"] for f in fichas})
-    usados = set(insumos)
+    # Nome de cada produção no sistema. Duas abas com o mesmo nome final
+    # gravariam uma por cima da outra; vale a primeira.
+    nomes_producao, usados = {}, {}
+    for receita in receitas_de_producao:
+        nome = nome_da_producao(receita)
+        if nome in usados:
+            avisos.append(
+                f"As abas de produção '{usados[nome]}' e '{receita['aba']}' viram o "
+                f"mesmo item ('{nome}'). Usei a primeira."
+            )
+            continue
+        usados[nome] = receita["aba"]
+        nomes_producao[id(receita)] = nome
 
-    return {
-        "insumos": dict(sorted(insumos.items())),
-        "insumos_novos": sorted(n for n in insumos if n not in ja_tem_insumo),
-        "pratos": pratos,
-        "pratos_novos": sorted(p for p in pratos if p not in ja_tem_prato),
-        "fichas": sorted(fichas, key=lambda f: (f["prato"], f["insumo"])),
-        "orfaos": sorted(n for n in ja_tem_insumo if n not in usados),
-        "unidades_divergentes": sorted(divergentes, key=lambda d: d["insumo"]),
-        # Prato que já recebe venda e que a planilha não cobre: continua sem
-        # ficha, então a venda dele não desconta nada do estoque.
-        "pratos_sem_ficha": sorted(p for p in ja_tem_prato if p not in set(pratos)),
-        "avisos": sorted(set(avisos)),
-    }
+    insumos = {}    # nome do insumo -> unidade
+    tipos = {}      # nome do insumo -> 'cru' ou 'producao'
+    producoes = []
 
+    # Primeiro as produções: a unidade delas precisa estar decidida antes
+    # de conferir como os pratos as citam.
+    for receita in receitas_de_producao:
+        nome = nomes_producao.get(id(receita))
+        if nome is None:
+            continue
+        em_porcao = chave(receita["aba"]) in PRODUCOES_EM_PORCAO
+        unidade_planilha = "un" if em_porcao else "kg"
+        # Item que já existe (a contagem de 23/09 criou vários molhos) fica
+        # na unidade em que é contado. Trocar aqui estragaria o fator da
+        # linha da contagem, que foi pensado nessa unidade.
+        unidade = unidade_atual.get(nome, unidade_planilha)
+        if unidade != unidade_planilha:
+            avisos.append(
+                f"'{nome}' já existe no sistema em '{unidade}' (é assim que a "
+                f"contagem conta), e a planilha pensa em '{unidade_planilha}'. "
+                f"Mantive '{unidade}': confira se 1 {unidade} equivale a 1 porção "
+                "da ficha."
+            )
+        insumos[nome] = unidade
+        tipos[nome] = "producao"
+        producoes.append({
+            "nome": nome,
+            "aba": receita["aba"],
+            "unidade": unidade,
+            "rendimento": (receita["porcoes"] or 1.0) if em_porcao
+            else _rendimento_confiavel(receita, avisos),
+            "receita": receita,
+        })
 
-def _indexar(receitas: list[dict]) -> dict[str, dict]:
-    """Índice das receitas por todos os nomes pelos quais elas podem ser citadas."""
-    indice = {}
-    for receita in receitas:
-        for nome in (receita["aba"], receita["nome"], receita["nome_venda"]):
-            if nome:
-                indice.setdefault(chave(nome), receita)
-    return indice
-
-
-def _rendimento_confiavel(receita: dict, avisos: list) -> float:
-    """Rendimento do lote, com defesa contra o campo preenchido errado.
-
-    Quando o rendimento declarado é muito menor que a soma dos ingredientes,
-    ele não é redução de cozimento — é erro de digitação. Nesses casos vale
-    a soma dos ingredientes, que ao menos mantém a conta na ordem de grandeza
-    certa, e o caso é reportado.
-    """
-    soma = sum(i["quantidade"] for i in receita["ingredientes"])
-    rendimento = receita["rendimento"] or 0
-    if rendimento >= soma * RENDIMENTO_MINIMO_PLAUSIVEL:
-        return rendimento
-    avisos.append(
-        f"Rendimento de '{receita['aba']}' está em {rendimento or 0:g} kg mas os "
-        f"ingredientes somam {soma:g} kg. Usei a soma para não inflar o consumo — "
-        "confira o campo na planilha."
-    )
-    return soma
-
-
-def _explodir(receita: dict, fator: float, catalogo: dict,
-              consumo: dict, pilha: list, avisos: list):
-    """Acumula em `consumo` os insumos crus de uma receita, já multiplicados.
-
-    `pilha` guarda as receitas sendo abertas neste caminho. Ela existe porque
-    a planilha tem aba que cita a si mesma ("Bombom de Alcatra" consome
-    "Bombom de Alcatra"): sem isso a explosão entraria em laço infinito.
-    A identidade é o objeto da receita, não o nome — "Brownie" existe nas duas
-    planilhas, e o prato Brownie de fato consome a produção Brownie.
-    """
-    for item in receita["ingredientes"]:
+    def resolver(item, receita):
+        """Insumo do sistema que a linha da ficha cita, ou None para pular."""
         nome = chave(item["nome"])
-        quantidade = item["quantidade"] * fator
-
+        if nome in SEM_ESTOQUE:
+            avisos.append(
+                f"'{item['nome']}' ficou fora das fichas: não é item de estoque."
+            )
+            return None
         alvo = APELIDOS_DE_RECEITA.get(nome)
         sub = catalogo.get(chave(alvo)) if alvo else catalogo.get(nome)
 
-        if sub is not None and id(sub) not in pilha:
+        if sub is not None and sub is not receita and id(sub) in nomes_producao:
             if nome in APELIDOS_INCERTOS:
                 avisos.append(
                     f"'{item['nome']}' não existe como aba; assumi a ficha "
                     f"'{sub['aba']}'. Confirme se é essa mesma."
                 )
-            rendimento = _rendimento_confiavel(sub, avisos)
-            if rendimento > 0:
-                _explodir(sub, quantidade / rendimento, catalogo, consumo,
-                          pilha + [id(sub)], avisos)
-                continue
+            producao = nomes_producao[id(sub)]
+            _conferir_unidade(item, producao, insumos[producao], receita, avisos)
+            return producao
 
-        if sub is not None:
+        if sub is receita:
             avisos.append(
-                f"A ficha '{sub['aba']}' cita a si mesma como ingrediente. "
+                f"A ficha '{receita['aba']}' cita a si mesma como ingrediente. "
                 "Tratei essa linha como insumo comprado."
             )
 
@@ -661,6 +683,8 @@ def _explodir(receita: dict, fator: float, catalogo: dict,
                 f"'{item['nome']}' foi lançado como '{insumo}' — "
                 f"{MAPEAMENTOS_ASSUMIDOS[nome]}."
             )
+        if tipos.get(insumo) == "producao":
+            return insumo
 
         declarada = (item["unidade_declarada"] or "").lower()
         if declarada.startswith("un") and unidade_do_insumo(insumo) != "un":
@@ -669,55 +693,245 @@ def _explodir(receita: dict, fator: float, catalogo: dict,
                 f"'{insumo}' é controlado em {unidade_do_insumo(insumo)}. "
                 "Confira a quantidade."
             )
+        insumos[insumo] = unidade_do_insumo(insumo)
+        tipos[insumo] = "cru"
+        return insumo
 
-        consumo[insumo] = consumo.get(insumo, 0.0) + quantidade
+    for producao in producoes:
+        itens = {}
+        for item in producao["receita"]["ingredientes"]:
+            insumo = resolver(item, producao["receita"])
+            if insumo is None:
+                continue
+            itens[insumo] = itens.get(insumo, 0.0) + item["quantidade"]
+        producao["itens"] = [
+            {"insumo": insumo, "quantidade": round(quantidade, 6)}
+            for insumo, quantidade in sorted(itens.items())
+        ]
+        del producao["receita"]
+
+    fichas = []       # (prato, insumo, quantidade por porção)
+    ja_montados = {}  # chave do prato -> aba que o montou, para pegar aba repetida
+
+    for receita in receitas_prato:
+        escolhidos = de_para_pratos.get(receita["aba"])
+        if isinstance(escolhidos, str):
+            escolhidos = [escolhidos]
+        if not escolhidos and _e_producao(receita):
+            continue   # já virou produção lá em cima
+
+        porcoes = receita["porcoes"] or 1.0
+        consumo = {}
+        for item in receita["ingredientes"]:
+            insumo = resolver(item, receita)
+            if insumo is None:
+                continue
+            consumo[insumo] = consumo.get(insumo, 0.0) + item["quantidade"]
+
+        for prato in escolhidos or [receita["nome_venda"]]:
+            # Duas abas descrevem "Barriga de porco" de jeitos diferentes. Vale
+            # a primeira: sem isso as duas gravariam no mesmo prato e a segunda
+            # apagaria a ficha da primeira sem ninguém ver.
+            if chave(prato) in ja_montados:
+                avisos.append(
+                    f"As abas '{ja_montados[chave(prato)]}' e '{receita['aba']}' viram "
+                    f"o mesmo prato ('{prato}'). Usei a primeira e ignorei a segunda."
+                )
+                continue
+            ja_montados[chave(prato)] = receita["aba"]
+
+            for insumo, quantidade in consumo.items():
+                por_porcao = round(quantidade / porcoes, 6)
+                corrigida = QUANTIDADES_CORRIGIDAS.get((chave(prato), chave(insumo)))
+                if corrigida is not None and corrigida != por_porcao:
+                    avisos.append(
+                        f"'{prato}' consome {por_porcao:g} de '{insumo}' na planilha; "
+                        f"usei {corrigida:g}, a quantidade confirmada pela cozinha."
+                    )
+                    por_porcao = corrigida
+                fichas.append({
+                    "prato": prato,
+                    "insumo": insumo,
+                    "quantidade": por_porcao,
+                    "aba": receita["aba"],
+                })
+
+    # Insumo cru que já existe, mas contado numa unidade diferente da que a
+    # ficha usa. Fica invisível e estraga a conta: a ficha gasta 0,06 kg de
+    # pão e o painel mostra o saldo em unidades. Produção não entra aqui:
+    # ela ficou na unidade que já tinha, com aviso.
+    divergentes = []
+    for nome, unidade in insumos.items():
+        if tipos[nome] != "cru" or nome not in unidade_atual or unidade_atual[nome] == unidade:
+            continue
+        if nome in contados:
+            avisos.append(
+                f"'{nome}' é contado em {unidade_atual[nome]} na contagem, e a ficha "
+                f"usa {unidade}. Ficou em {unidade_atual[nome]}: acerte a quantidade "
+                "na tela Ficha Técnica para ela ficar nessa unidade."
+            )
+            continue
+        divergentes.append({"insumo": nome, "atual": unidade_atual[nome], "planilha": unidade})
+
+    pratos = sorted({f["prato"] for f in fichas})
+    usados_no_plano = set(insumos)
+
+    return {
+        "insumos": dict(sorted(insumos.items())),
+        "tipos": tipos,
+        "insumos_novos": sorted(n for n in insumos if n not in unidade_atual),
+        # Já existiam como cru (a contagem criou vários molhos) e passam a
+        # ser produção, com ficha.
+        "viram_producao": sorted(
+            n for n, t in tipos.items()
+            if t == "producao" and n in tipo_atual and tipo_atual[n] != "producao"
+        ),
+        "producoes": sorted(producoes, key=lambda p: p["nome"]),
+        "pratos": pratos,
+        "pratos_novos": sorted(p for p in pratos if p not in ja_tem_prato),
+        "fichas": sorted(fichas, key=lambda f: (f["prato"], f["insumo"])),
+        "orfaos": sorted(n for n in unidade_atual if n not in usados_no_plano),
+        "unidades_divergentes": sorted(divergentes, key=lambda d: d["insumo"]),
+        # Prato que já recebe venda e que a planilha não cobre: continua sem
+        # ficha, então a venda dele não desconta nada do estoque.
+        "pratos_sem_ficha": sorted(p for p in ja_tem_prato if p not in set(pratos)),
+        "avisos": sorted(set(avisos)),
+    }
+
+
+def _conferir_unidade(item: dict, producao: str, unidade: str,
+                      receita: dict, avisos: list):
+    """Avisa quando a ficha cita a produção numa unidade que não é a dela.
+
+    A planilha escreve "1 und" de dadinho e "0,08 Gr" de dadinho em fichas
+    diferentes. Uma das duas está errada, e a conta não tem como saber qual.
+    """
+    declarada = (item["unidade_declarada"] or "").lower()
+    por_porcao = unidade in ("un", "pacote")
+    citada_por_porcao = declarada.startswith("un")
+    if por_porcao != citada_por_porcao:
+        avisos.append(
+            f"'{receita['aba']}' usa {item['quantidade']:g} {item['unidade_declarada'] or ''} "
+            f"de '{producao}', que é controlado em {unidade}. Confira a quantidade."
+        )
+
+
+def _indexar(receitas: list[dict]) -> dict[str, dict]:
+    """Índice das receitas por todos os nomes pelos quais elas podem ser citadas."""
+    indice = {}
+    for receita in receitas:
+        for nome in (receita["aba"], receita["nome"], receita["nome_venda"]):
+            if nome:
+                indice.setdefault(chave(nome), receita)
+    return indice
+
+
+def _rendimento_confiavel(receita: dict, avisos: list) -> float:
+    """Rendimento de 1 receita, com defesa contra o campo preenchido errado.
+
+    O rendimento não mexe no que a produção desconta (isso é a ficha ×
+    receitas); ele só preenche o "quanto rendeu" na tela de produção. Mesmo
+    assim, um número absurdo ali seria digitado adiante sem ninguém ver.
+    Quando o declarado foge muito da soma dos ingredientes — "Farofa"
+    rende 0,03 kg de 1,53 kg, "Molho Mostarda" rende 26 kg de 0,64 kg —
+    vale a soma, e o caso é reportado.
+    """
+    soma = sum(i["quantidade"] for i in receita["ingredientes"])
+    rendimento = receita["rendimento"] or 0
+    if soma * RENDIMENTO_MINIMO_PLAUSIVEL <= rendimento <= soma * RENDIMENTO_MAXIMO_PLAUSIVEL:
+        return rendimento
+    avisos.append(
+        f"Rendimento de '{receita['aba']}' está em {rendimento or 0:g} kg mas os "
+        f"ingredientes somam {soma:g} kg. Usei a soma como rendimento de 1 receita — "
+        "confira o campo na planilha ou corrija na tela Ficha Técnica."
+    )
+    return round(soma, 3)
 
 
 # ---------- Gravação ----------
 
 def aplicar_plano(plano: dict, substituir_fichas: bool = True,
                   corrigir_unidades: bool = True) -> dict:
-    """Grava o plano no banco. Devolve a contagem do que foi feito."""
-    for nome in plano["insumos_novos"]:
-        crud.cadastrar_insumo(nome, plano["insumos"][nome])
+    """Grava o plano no banco, tudo ou nada. Devolve a contagem do que foi feito.
 
-    if corrigir_unidades and plano.get("unidades_divergentes"):
-        conn = get_connection()
-        for divergencia in plano["unidades_divergentes"]:
+    Com `substituir_fichas`, a ficha de cada prato e de cada produção da
+    planilha é trocada inteira — inclusive o que tiver sido editado na tela
+    Ficha Técnica. Sem isso, um insumo que saiu da receita continuaria
+    sendo descontado para sempre.
+    """
+    conn = get_connection()
+    try:
+        rendimento = {p["nome"]: p["rendimento"] for p in plano["producoes"]}
+        for nome in plano["insumos_novos"]:
+            tipo = plano["tipos"].get(nome, "cru")
             conn.execute(
-                "UPDATE insumos SET unidade_medida = ? WHERE nome = ?",
-                (divergencia["planilha"], divergencia["insumo"]),
+                """INSERT INTO insumos (nome, unidade_medida, estoque_minimo, tipo, rendimento)
+                   VALUES (?, ?, 0, ?, ?)""",
+                (nome, plano["insumos"][nome], tipo, rendimento.get(nome)),
             )
+
+        if corrigir_unidades:
+            for divergencia in plano.get("unidades_divergentes", []):
+                conn.execute(
+                    "UPDATE insumos SET unidade_medida = ? WHERE nome = ?",
+                    (divergencia["planilha"], divergencia["insumo"]),
+                )
+
+        for producao in plano["producoes"]:
+            conn.execute(
+                "UPDATE insumos SET tipo = 'producao', rendimento = ? WHERE nome = ?",
+                (producao["rendimento"], producao["nome"]),
+            )
+
+        for nome in plano["pratos_novos"]:
+            conn.execute("INSERT INTO pratos (nome) VALUES (?)", (nome,))
+
+        ids_insumo = {
+            d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM insumos").fetchall()
+        }
+        ids_prato = {
+            d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM pratos").fetchall()
+        }
+
+        if substituir_fichas:
+            for prato in sorted({f["prato"] for f in plano["fichas"]}):
+                conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (ids_prato[prato],))
+            for producao in plano["producoes"]:
+                conn.execute("DELETE FROM ficha_producao WHERE producao_id = ?",
+                             (ids_insumo[producao["nome"]],))
+
+        for ficha in plano["fichas"]:
+            conn.execute(
+                """INSERT INTO ficha_tecnica (prato_id, insumo_id, quantidade_por_prato)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(prato_id, insumo_id)
+                   DO UPDATE SET quantidade_por_prato = excluded.quantidade_por_prato""",
+                (ids_prato[ficha["prato"]], ids_insumo[ficha["insumo"]], ficha["quantidade"]),
+            )
+        linhas_producao = 0
+        for producao in plano["producoes"]:
+            for item in producao["itens"]:
+                conn.execute(
+                    """INSERT INTO ficha_producao (producao_id, insumo_id, quantidade_por_receita)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(producao_id, insumo_id)
+                       DO UPDATE SET quantidade_por_receita = excluded.quantidade_por_receita""",
+                    (ids_insumo[producao["nome"]], ids_insumo[item["insumo"]],
+                     item["quantidade"]),
+                )
+                linhas_producao += 1
         conn.commit()
+    except Exception:
+        conn.rollback()
         conn.close()
-
-    for nome in plano["pratos_novos"]:
-        crud.cadastrar_prato(nome)
-
-    if substituir_fichas:
-        _limpar_fichas(sorted({f["prato"] for f in plano["fichas"]}))
-
-    for ficha in plano["fichas"]:
-        crud.definir_ficha_tecnica(ficha["prato"], ficha["insumo"], ficha["quantidade"])
+        raise
+    conn.close()
 
     return {
         "insumos": len(plano["insumos_novos"]),
         "pratos": len(plano["pratos_novos"]),
         "fichas": len(plano["fichas"]),
+        "producoes": len(plano["producoes"]),
+        "linhas_producao": linhas_producao,
         "unidades": len(plano.get("unidades_divergentes", [])) if corrigir_unidades else 0,
     }
-
-
-def _limpar_fichas(pratos: list[str]):
-    """Apaga a ficha atual dos pratos que a planilha vai redefinir.
-
-    Sem isso um insumo que saiu da receita continuaria sendo descontado para
-    sempre, porque `definir_ficha_tecnica` só cria ou atualiza linha.
-    """
-    conn = get_connection()
-    for prato in pratos:
-        linha = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato,)).fetchone()
-        if linha:
-            conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (linha["id"],))
-    conn.commit()
-    conn.close()

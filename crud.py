@@ -5,10 +5,15 @@ estoque teórico (o coração do projeto — é o que elimina a contagem semanal
 
 Lógica do cálculo de estoque teórico para um insumo:
     1. Pega a última contagem física registrada (se houver) como ponto de partida.
-    2. Soma todas as compras feitas depois dessa contagem.
-    3. Subtrai o consumo calculado a partir das vendas diárias x ficha técnica,
-       também depois dessa contagem.
+    2. Soma as entradas feitas depois dessa contagem: compras e, para item
+       feito na cozinha, o que foi produzido.
+    3. Subtrai as saídas, também depois dessa contagem: vendas × ficha do
+       prato e o que cada produção gastou dos ingredientes.
     4. Resultado = estoque teórico atual, sem precisar contar nada fisicamente.
+
+A venda desconta só o que está na ficha do prato. Se a parmegiana leva
+molho ao sugo, a venda tira o molho, não o tomate: o tomate sai quando o
+molho é produzido.
 """
 
 import datetime
@@ -39,14 +44,59 @@ def hoje() -> datetime.date:
 
 # ---------- Cadastros ----------
 
-def cadastrar_insumo(nome: str, unidade_medida: str, estoque_minimo: float = 0):
+TIPOS_DE_INSUMO = {"cru": "Cru (comprado)", "producao": "Produção (feito na cozinha)"}
+
+
+def cadastrar_insumo(nome: str, unidade_medida: str, estoque_minimo: float = 0,
+                     tipo: str = "cru", rendimento: float = None):
+    if tipo not in TIPOS_DE_INSUMO:
+        raise ValueError(f"Tipo de insumo desconhecido: '{tipo}'.")
     conn = get_connection()
     conn.execute(
-        "INSERT INTO insumos (nome, unidade_medida, estoque_minimo) VALUES (?, ?, ?)",
-        (nome, unidade_medida, estoque_minimo),
+        """INSERT INTO insumos (nome, unidade_medida, estoque_minimo, tipo, rendimento)
+           VALUES (?, ?, ?, ?, ?)""",
+        (nome, unidade_medida, estoque_minimo, tipo,
+         rendimento if tipo == "producao" else None),
     )
     conn.commit()
     conn.close()
+
+
+def definir_tipo_do_insumo(nome: str, tipo: str):
+    """Marca um insumo como cru ou produção.
+
+    Voltar para cru apaga a ficha de produção dele: um item comprado não
+    tem receita, e a ficha esquecida lá faria a tela de produção oferecer
+    algo que ninguém produz. As produções já lançadas ficam, porque são
+    história do estoque.
+    """
+    if tipo not in TIPOS_DE_INSUMO:
+        raise ValueError(f"Tipo de insumo desconhecido: '{tipo}'.")
+    conn = get_connection()
+    try:
+        insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (nome,)).fetchone()
+        if not insumo:
+            raise ValueError(f"Insumo '{nome}' não encontrado.")
+        if tipo == "cru":
+            conn.execute("DELETE FROM ficha_producao WHERE producao_id = ?", (insumo["id"],))
+            conn.execute("UPDATE insumos SET tipo = 'cru', rendimento = NULL WHERE id = ?",
+                         (insumo["id"],))
+        else:
+            conn.execute("UPDATE insumos SET tipo = 'producao' WHERE id = ?", (insumo["id"],))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+
+
+def tipos_dos_insumos() -> dict[str, str]:
+    """Nome do insumo -> 'cru' ou 'producao'."""
+    conn = get_connection()
+    linhas = conn.execute("SELECT nome, tipo FROM insumos").fetchall()
+    conn.close()
+    return {linha["nome"]: linha["tipo"] for linha in linhas}
 
 
 def cadastrar_prato(nome: str):
@@ -80,8 +130,9 @@ def definir_ficha_tecnica(prato_nome: str, insumo_nome: str, quantidade_por_prat
 
 def excluir_insumo(nome: str):
     """
-    Exclui um insumo e todo o histórico ligado a ele (ficha técnica,
-    compras e contagens físicas). Use com cuidado: não tem como desfazer.
+    Exclui um insumo e todo o histórico ligado a ele (ficha técnica, ficha
+    e lançamentos de produção, compras e contagens físicas). Use com
+    cuidado: não tem como desfazer.
     """
     conn = get_connection()
     insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (nome,)).fetchone()
@@ -91,6 +142,18 @@ def excluir_insumo(nome: str):
 
     insumo_id = insumo["id"]
     conn.execute("DELETE FROM ficha_tecnica WHERE insumo_id = ?", (insumo_id,))
+    conn.execute(
+        "DELETE FROM ficha_producao WHERE producao_id = ? OR insumo_id = ?",
+        (insumo_id, insumo_id),
+    )
+    # As levas produzidas deste item somem com o que elas gastaram; e o que
+    # este item gastou em levas de outras produções também sai.
+    conn.execute(
+        """DELETE FROM producoes_consumo WHERE insumo_id = ? OR producao_id IN
+               (SELECT id FROM producoes WHERE insumo_id = ?)""",
+        (insumo_id, insumo_id),
+    )
+    conn.execute("DELETE FROM producoes WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM compras WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM contagens_fisicas WHERE insumo_id = ?", (insumo_id,))
     conn.execute(
@@ -124,6 +187,232 @@ def excluir_prato(nome: str):
     conn.commit()
     conn.close()
 
+
+# ---------- Ficha técnica: leitura e edição ----------
+
+# Há duas fichas, e é a separação entre elas que faz a venda descontar só
+# o que vai no prato:
+#
+# - a do **prato** (ficha_tecnica): por porção vendida. Pode citar insumo
+#   cru ou produção — a parmegiana leva o bife empanado e o molho ao sugo;
+# - a da **produção** (ficha_producao): por receita feita na cozinha. É ela
+#   que tira o tomate e a cebola do estoque, no dia em que o molho é feito.
+#
+# A tela de edição grava a ficha inteira de uma vez: o que sumiu da tabela
+# sai da ficha. Tudo ou nada, como as outras operações em lote.
+
+def _itens_da_ficha(conn, itens: list[dict], proprio_id: int = None) -> list[tuple]:
+    """Resolve e valida as linhas de uma ficha antes de gravar qualquer coisa."""
+    vistos, resolvidos = set(), []
+    for item in itens:
+        nome = item["insumo"]
+        quantidade = float(item["quantidade"])
+        if quantidade <= 0:
+            raise ValueError(f"A quantidade de '{nome}' precisa ser maior que zero.")
+        if nome in vistos:
+            raise ValueError(f"'{nome}' aparece duas vezes na ficha. Deixe uma linha só.")
+        vistos.add(nome)
+        insumo = conn.execute("SELECT id FROM insumos WHERE nome = ?", (nome,)).fetchone()
+        if not insumo:
+            raise ValueError(f"Insumo '{nome}' não encontrado.")
+        if proprio_id is not None and insumo["id"] == proprio_id:
+            raise ValueError(f"'{nome}' não pode ser ingrediente dele mesmo.")
+        resolvidos.append((insumo["id"], quantidade))
+    return resolvidos
+
+
+def ficha_do_prato(prato_nome: str) -> list[dict]:
+    """O que 1 porção do prato tira do estoque, linha a linha."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo, ft.quantidade_por_prato AS quantidade,
+               i.unidade_medida, i.tipo
+        FROM ficha_tecnica ft
+        JOIN pratos p ON p.id = ft.prato_id
+        JOIN insumos i ON i.id = ft.insumo_id
+        WHERE p.nome = ?
+        ORDER BY i.nome
+        """,
+        (prato_nome,),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def salvar_ficha_do_prato(prato_nome: str, itens: list[dict]) -> int:
+    """Troca a ficha do prato inteira pela lista `itens` ({'insumo', 'quantidade'}).
+
+    Lista vazia apaga a ficha — o prato passa a não descontar nada, e a
+    tela avisa isso antes de gravar.
+    """
+    conn = get_connection()
+    try:
+        prato = conn.execute("SELECT id FROM pratos WHERE nome = ?", (prato_nome,)).fetchone()
+        if not prato:
+            raise ValueError(f"Prato '{prato_nome}' não encontrado.")
+        resolvidos = _itens_da_ficha(conn, itens)
+        conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (prato["id"],))
+        for insumo_id, quantidade in resolvidos:
+            conn.execute(
+                """INSERT INTO ficha_tecnica (prato_id, insumo_id, quantidade_por_prato)
+                   VALUES (?, ?, ?)""",
+                (prato["id"], insumo_id, quantidade),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(resolvidos)
+
+
+def listar_producoes() -> list[dict]:
+    """Os itens feitos na cozinha, com o rendimento e o tamanho da ficha."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome, i.unidade_medida, i.rendimento,
+               (SELECT COUNT(*) FROM ficha_producao fp
+                WHERE fp.producao_id = i.id) AS itens_na_ficha
+        FROM insumos i
+        WHERE i.tipo = 'producao'
+        ORDER BY i.nome
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def ficha_da_producao(producao_nome: str) -> dict:
+    """Receita de uma produção: o que 1 receita gasta e quanto ela rende."""
+    conn = get_connection()
+    producao = conn.execute(
+        "SELECT id, unidade_medida, rendimento, tipo FROM insumos WHERE nome = ?",
+        (producao_nome,),
+    ).fetchone()
+    if not producao:
+        conn.close()
+        raise ValueError(f"Produção '{producao_nome}' não encontrada.")
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo, fp.quantidade_por_receita AS quantidade,
+               i.unidade_medida, i.tipo
+        FROM ficha_producao fp
+        JOIN insumos i ON i.id = fp.insumo_id
+        WHERE fp.producao_id = ?
+        ORDER BY i.nome
+        """,
+        (producao["id"],),
+    ).fetchall()
+    conn.close()
+    return {
+        "producao": producao_nome,
+        "unidade_medida": producao["unidade_medida"],
+        "rendimento": producao["rendimento"],
+        "itens": [dict(linha) for linha in linhas],
+    }
+
+
+def _caminho_de_ciclo(conn, producao_id: int, ingredientes: list[int]) -> list[str] | None:
+    """Procura uma volta do tipo "molho A leva molho B, que leva molho A".
+
+    Uma volta dessas não trava a conta de estoque (a produção grava o que
+    gastou no momento), mas é receita impossível e quase sempre ingrediente
+    escolhido errado. Devolve os nomes do caminho, ou None.
+    """
+    arestas = {}
+    for linha in conn.execute(
+        "SELECT producao_id, insumo_id FROM ficha_producao WHERE producao_id <> ?",
+        (producao_id,),
+    ).fetchall():
+        arestas.setdefault(linha["producao_id"], []).append(linha["insumo_id"])
+    arestas[producao_id] = list(ingredientes)
+
+    def visitar(atual, caminho):
+        for proximo in arestas.get(atual, []):
+            if proximo == producao_id:
+                return caminho + [proximo]
+            if proximo not in caminho:
+                achado = visitar(proximo, caminho + [proximo])
+                if achado:
+                    return achado
+        return None
+
+    caminho = visitar(producao_id, [producao_id])
+    if not caminho:
+        return None
+    nomes = {
+        linha["id"]: linha["nome"]
+        for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+    }
+    return [nomes[i] for i in caminho]
+
+
+def salvar_ficha_da_producao(producao_nome: str, itens: list[dict],
+                             rendimento: float) -> int:
+    """Troca a receita da produção inteira e grava o rendimento de 1 receita."""
+    if rendimento is None or float(rendimento) <= 0:
+        raise ValueError("Informe quanto 1 receita rende, maior que zero.")
+
+    conn = get_connection()
+    try:
+        producao = conn.execute(
+            "SELECT id, tipo FROM insumos WHERE nome = ?", (producao_nome,)
+        ).fetchone()
+        if not producao:
+            raise ValueError(f"Produção '{producao_nome}' não encontrada.")
+        if producao["tipo"] != "producao":
+            raise ValueError(
+                f"'{producao_nome}' está cadastrado como insumo cru. Marque-o "
+                "como produção na tela de Insumos antes de dar uma receita a ele."
+            )
+        resolvidos = _itens_da_ficha(conn, itens, proprio_id=producao["id"])
+        ciclo = _caminho_de_ciclo(conn, producao["id"], [i for i, _ in resolvidos])
+        if ciclo:
+            raise ValueError(
+                "Essa receita fecha uma volta: " + " → ".join(ciclo) +
+                ". Uma produção não pode depender dela mesma."
+            )
+        conn.execute("DELETE FROM ficha_producao WHERE producao_id = ?", (producao["id"],))
+        for insumo_id, quantidade in resolvidos:
+            conn.execute(
+                """INSERT INTO ficha_producao (producao_id, insumo_id, quantidade_por_receita)
+                   VALUES (?, ?, ?)""",
+                (producao["id"], insumo_id, quantidade),
+            )
+        conn.execute("UPDATE insumos SET rendimento = ? WHERE id = ?",
+                     (float(rendimento), producao["id"]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(resolvidos)
+
+
+def onde_o_insumo_e_usado(insumo_nome: str) -> list[str]:
+    """Pratos e produções cuja ficha cita o insumo."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT p.nome AS nome FROM ficha_tecnica ft
+        JOIN pratos p ON p.id = ft.prato_id
+        JOIN insumos i ON i.id = ft.insumo_id
+        WHERE i.nome = ?
+        UNION
+        SELECT pr.nome AS nome FROM ficha_producao fp
+        JOIN insumos pr ON pr.id = fp.producao_id
+        JOIN insumos i ON i.id = fp.insumo_id
+        WHERE i.nome = ?
+        ORDER BY nome
+        """,
+        (insumo_nome, insumo_nome),
+    ).fetchall()
+    conn.close()
+    return [linha["nome"] for linha in linhas]
 
 # ---------- Lançamentos ----------
 
@@ -683,84 +972,222 @@ def atualizar_estoques_minimos(itens: list[dict]) -> int:
 
 # ---------- O cálculo principal ----------
 
+# ---------- Produção ----------
+
+# Produzir um molho é um movimento de estoque com dois lados: entra o molho
+# e saem os ingredientes da receita. Quem lança diz quantas receitas fez e
+# quanto rendeu; o cru que sai é a ficha × receitas, e não depende do
+# rendimento — que na planilha da cozinha está errado em vários molhos.
+#
+# O que a leva gastou é gravado em producoes_consumo no momento do
+# lançamento, em vez de recalculado pela ficha a cada consulta. Se a
+# receita for editada amanhã, a produção de hoje continua tendo gastado o
+# que gastou.
+
+def impacto_da_producao(producao_nome: str, receitas: float) -> list[dict]:
+    """Quanto de cada ingrediente sai do estoque ao fazer `receitas` receitas."""
+    ficha = ficha_da_producao(producao_nome)
+    return [
+        {
+            "insumo": item["insumo"],
+            "unidade_medida": item["unidade_medida"],
+            "tipo": item["tipo"],
+            "consumo": round(item["quantidade"] * receitas, 3),
+        }
+        for item in ficha["itens"]
+    ]
+
+
+def producoes_do_dia(producao_nome: str, data: str) -> dict:
+    """Quantas levas daquela produção já estão lançadas na data."""
+    conn = get_connection()
+    linha = conn.execute(
+        """
+        SELECT COUNT(p.id) AS levas, COALESCE(SUM(p.quantidade_produzida), 0) AS produzido
+        FROM producoes p JOIN insumos i ON i.id = p.insumo_id
+        WHERE i.nome = ? AND p.data = ?
+        """,
+        (producao_nome, data),
+    ).fetchone()
+    conn.close()
+    return {"levas": linha["levas"], "produzido": linha["produzido"]}
+
+
+def registrar_producao(producao_nome: str, receitas: float, quantidade_produzida: float,
+                       data: str, observacao: str = None) -> int:
+    """Lança uma leva: entra o produzido, sai o que a receita gasta. Devolve o id.
+
+    Recusa produção sem ficha. Ela até poderia entrar só com o produzido,
+    mas aí o molho apareceria no estoque sem nenhum tomate ter saído, e
+    ninguém perceberia.
+    """
+    receitas = float(receitas)
+    quantidade_produzida = float(quantidade_produzida)
+    if receitas <= 0:
+        raise ValueError("Informe quantas receitas foram feitas, maior que zero.")
+    if quantidade_produzida <= 0:
+        raise ValueError("Informe quanto rendeu, maior que zero.")
+
+    conn = get_connection()
+    try:
+        producao = conn.execute(
+            "SELECT id, tipo FROM insumos WHERE nome = ?", (producao_nome,)
+        ).fetchone()
+        if not producao:
+            raise ValueError(f"Produção '{producao_nome}' não encontrada.")
+        if producao["tipo"] != "producao":
+            raise ValueError(f"'{producao_nome}' não está cadastrado como produção.")
+        ficha = conn.execute(
+            """SELECT insumo_id, quantidade_por_receita FROM ficha_producao
+               WHERE producao_id = ?""",
+            (producao["id"],),
+        ).fetchall()
+        if not ficha:
+            raise ValueError(
+                f"'{producao_nome}' ainda não tem ficha de produção. Cadastre a "
+                "receita na tela Ficha Técnica antes de lançar."
+            )
+
+        producao_id = conn.execute(
+            """INSERT INTO producoes (insumo_id, data, receitas, quantidade_produzida, observacao)
+               VALUES (?, ?, ?, ?, ?) RETURNING id""",
+            (producao["id"], data, receitas, quantidade_produzida, observacao or None),
+        ).fetchone()["id"]
+        for linha in ficha:
+            conn.execute(
+                """INSERT INTO producoes_consumo (producao_id, insumo_id, quantidade)
+                   VALUES (?, ?, ?)""",
+                (producao_id, linha["insumo_id"], linha["quantidade_por_receita"] * receitas),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return producao_id
+
+
+def producoes_no_periodo(inicio: str, fim: str) -> list[dict]:
+    """As levas lançadas entre duas datas (inclusive), da mais recente para trás."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT p.id, p.data, i.nome AS producao, p.receitas,
+               p.quantidade_produzida, i.unidade_medida,
+               COALESCE(p.observacao, '') AS observacao
+        FROM producoes p JOIN insumos i ON i.id = p.insumo_id
+        WHERE p.data >= ? AND p.data <= ?
+        ORDER BY p.data DESC, p.id DESC
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def consumo_da_producao(producao_id: int) -> list[dict]:
+    """O que uma leva já lançada gastou, como ficou gravado."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT i.nome AS insumo, pc.quantidade, i.unidade_medida
+        FROM producoes_consumo pc JOIN insumos i ON i.id = pc.insumo_id
+        WHERE pc.producao_id = ?
+        ORDER BY i.nome
+        """,
+        (producao_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def excluir_producao(producao_id: int):
+    """Apaga uma leva lançada: o produzido sai e os ingredientes voltam."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM producoes_consumo WHERE producao_id = ?", (producao_id,))
+        apagadas = conn.execute(
+            "DELETE FROM producoes WHERE id = ?", (producao_id,)
+        ).rowcount
+        if not apagadas:
+            raise ValueError("Essa produção não existe mais.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+
+
+# ---------- Estoque teórico ----------
+
+# Todo movimento que mexe no estoque, numa lista só: cada linha diz qual
+# insumo, em que dia, quanto entrou e quanto saiu. As contas de estoque,
+# saída e perda leem daqui, para que um tipo novo de movimento entre em
+# um lugar e não em cinco.
+#
+# - compra: entra o insumo comprado;
+# - produção: entra o item produzido;
+# - venda: sai o que a ficha do prato manda (só o primeiro nível);
+# - gasto de produção: sai o que cada leva gastou, como foi gravado.
+SQL_MOVIMENTOS = """
+    SELECT insumo_id, data, quantidade AS entrada, 0.0 AS saida
+    FROM compras
+    UNION ALL
+    SELECT insumo_id, data, quantidade_produzida, 0.0
+    FROM producoes
+    UNION ALL
+    SELECT ft.insumo_id, v.data, 0.0, v.quantidade * ft.quantidade_por_prato
+    FROM vendas_diarias v
+    JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+    UNION ALL
+    SELECT pc.insumo_id, p.data, 0.0, pc.quantidade
+    FROM producoes_consumo pc
+    JOIN producoes p ON p.id = pc.producao_id
+"""
+
 def calcular_estoque_teorico(insumo_nome: str) -> dict:
     """
     Calcula o estoque teórico atual de um insumo:
-    última contagem física + compras - consumo, desde a data dessa contagem.
+    última contagem física + entradas - saídas, desde a data dessa contagem.
     """
-    conn = get_connection()
-    insumo = conn.execute("SELECT * FROM insumos WHERE nome = ?", (insumo_nome,)).fetchone()
-    if not insumo:
-        conn.close()
-        raise ValueError(f"Insumo '{insumo_nome}' não encontrado.")
-
-    insumo_id = insumo["id"]
-
-    # 1. Última contagem física (ponto de partida)
-    ultima_contagem = conn.execute(
-        """SELECT quantidade_contada, data FROM contagens_fisicas
-           WHERE insumo_id = ? ORDER BY data DESC LIMIT 1""",
-        (insumo_id,),
-    ).fetchone()
-
-    if ultima_contagem:
-        baseline = ultima_contagem["quantidade_contada"]
-        data_baseline = ultima_contagem["data"]
-    else:
-        baseline = 0
-        data_baseline = "0000-00-00"  # sem contagem ainda: considera tudo desde o início
-
-    # 2. Compras a partir da baseline (inclui o próprio dia da contagem)
-    total_compras = conn.execute(
-        """SELECT COALESCE(SUM(quantidade), 0) AS total FROM compras
-           WHERE insumo_id = ? AND data >= ?""",
-        (insumo_id, data_baseline),
-    ).fetchone()["total"]
-
-    # 3. Consumo a partir da baseline (vendas x ficha técnica, inclui o mesmo dia)
-    total_consumo = conn.execute(
-        """
-        SELECT COALESCE(SUM(v.quantidade * ft.quantidade_por_prato), 0) AS total
-        FROM vendas_diarias v
-        JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-        WHERE ft.insumo_id = ? AND v.data >= ?
-        """,
-        (insumo_id, data_baseline),
-    ).fetchone()["total"]
-
-    conn.close()
-
-    estoque_atual = baseline + total_compras - total_consumo
-
-    return {
-        "insumo": insumo_nome,
-        "unidade_medida": insumo["unidade_medida"],
-        "estoque_minimo": insumo["estoque_minimo"],
-        "estoque_atual": round(estoque_atual, 1),
-        "abaixo_do_minimo": estoque_atual < insumo["estoque_minimo"],
-        "baseline_usada": data_baseline if ultima_contagem else SEM_CONTAGEM,
-    }
+    for estoque in _estoques("WHERE i.nome = ?", (insumo_nome,)):
+        return estoque
+    raise ValueError(f"Insumo '{insumo_nome}' não encontrado.")
 
 
-# A mesma conta de calcular_estoque_teorico, porém para todos os insumos de
-# uma vez. A versão antiga chamava aquela função em laço, o que dava 4
-# consultas por insumo — irrelevante num arquivo SQLite local, mas fatal
-# num banco remoto: com 27 insumos eram 109 idas ao servidor, cerca de 27
-# segundos só para montar o Dashboard. Aqui é uma consulta só.
+# A conta do estoque para todos os insumos de uma vez. A versão antiga
+# chamava a de um insumo em laço, o que dava 4 consultas por insumo —
+# irrelevante num arquivo SQLite local, mas fatal num banco remoto: com 27
+# insumos eram 109 idas ao servidor, cerca de 27 segundos só para montar o
+# Dashboard. Aqui é uma consulta só.
 #
-# A lógica é a de sempre e não mudou: baseline = última contagem física,
-# mais compras e menos consumo a partir dela, sempre com >= (vendas do
-# próprio dia da contagem precisam ser descontadas).
-SQL_ESTOQUE_DE_TODOS = """
+# A lógica é a de sempre: baseline = última contagem física, mais entradas
+# e menos saídas a partir dela, sempre com >= (vendas do próprio dia da
+# contagem precisam ser descontadas). O que mudou em 24/09/2026 é só de
+# onde vêm entradas e saídas: de SQL_MOVIMENTOS, que inclui a produção.
+SQL_ESTOQUE_DE_TODOS = f"""
     WITH ultima AS (
         SELECT insumo_id, MAX(data) AS data_baseline
         FROM contagens_fisicas
         GROUP BY insumo_id
+    ),
+    movimentos AS ({SQL_MOVIMENTOS}),
+    desde_a_contagem AS (
+        SELECT m.insumo_id,
+               SUM(m.entrada) AS total_entradas,
+               SUM(m.saida) AS total_saidas
+        FROM movimentos m
+        LEFT JOIN ultima u ON u.insumo_id = m.insumo_id
+        WHERE m.data >= COALESCE(u.data_baseline, '0000-00-00')
+        GROUP BY m.insumo_id
     )
     SELECT
         i.nome,
         i.unidade_medida,
         i.estoque_minimo,
+        i.tipo,
         u.data_baseline,
         COALESCE((
             SELECT c.quantidade_contada
@@ -769,41 +1196,37 @@ SQL_ESTOQUE_DE_TODOS = """
             ORDER BY c.id DESC
             LIMIT 1
         ), 0) AS baseline,
-        COALESCE((
-            SELECT SUM(co.quantidade)
-            FROM compras co
-            WHERE co.insumo_id = i.id
-              AND co.data >= COALESCE(u.data_baseline, '0000-00-00')
-        ), 0) AS total_compras,
-        COALESCE((
-            SELECT SUM(v.quantidade * ft.quantidade_por_prato)
-            FROM vendas_diarias v
-            JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-            WHERE ft.insumo_id = i.id
-              AND v.data >= COALESCE(u.data_baseline, '0000-00-00')
-        ), 0) AS total_consumo
+        COALESCE(d.total_entradas, 0) AS total_entradas,
+        COALESCE(d.total_saidas, 0) AS total_saidas
     FROM insumos i
     LEFT JOIN ultima u ON u.insumo_id = i.id
+    LEFT JOIN desde_a_contagem d ON d.insumo_id = i.id
 """
 
 
-def calcular_estoque_todos_insumos() -> list[dict]:
+def _estoques(filtro: str = "", parametros: tuple = ()) -> list[dict]:
     conn = get_connection()
-    linhas = conn.execute(SQL_ESTOQUE_DE_TODOS).fetchall()
+    linhas = conn.execute(f"{SQL_ESTOQUE_DE_TODOS} {filtro} ORDER BY i.nome",
+                          parametros).fetchall()
     conn.close()
 
     resultado = []
     for linha in linhas:
-        estoque_atual = linha["baseline"] + linha["total_compras"] - linha["total_consumo"]
+        estoque_atual = linha["baseline"] + linha["total_entradas"] - linha["total_saidas"]
         resultado.append({
             "insumo": linha["nome"],
             "unidade_medida": linha["unidade_medida"],
+            "tipo": linha["tipo"],
             "estoque_minimo": linha["estoque_minimo"],
             "estoque_atual": round(estoque_atual, 1),
             "abaixo_do_minimo": estoque_atual < linha["estoque_minimo"],
             "baseline_usada": linha["data_baseline"] or SEM_CONTAGEM,
         })
     return resultado
+
+
+def calcular_estoque_todos_insumos() -> list[dict]:
+    return _estoques()
 
 
 # ---------- Mapeamento de produtos de nota fiscal (NF-e) ----------
@@ -948,18 +1371,17 @@ def _data_inicio(dias: int) -> str:
 
 
 def consumo_por_insumo(dias: int = 30) -> list[dict]:
-    """Quanto de cada insumo foi consumido (vendas × ficha técnica) no período."""
+    """Quanto de cada insumo saiu no período: venda × ficha e gasto de produção."""
     conn = get_connection()
     linhas = conn.execute(
-        """
+        f"""
         SELECT i.nome AS insumo,
                i.unidade_medida,
-               SUM(v.quantidade * ft.quantidade_por_prato) AS consumo
-        FROM vendas_diarias v
-        JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-        JOIN insumos i ON i.id = ft.insumo_id
-        WHERE v.data >= ?
-        GROUP BY i.id
+               SUM(m.saida) AS consumo
+        FROM ({SQL_MOVIMENTOS}) m
+        JOIN insumos i ON i.id = m.insumo_id
+        WHERE m.data >= ? AND m.saida > 0
+        GROUP BY i.id, i.nome, i.unidade_medida
         ORDER BY consumo DESC
         """,
         (_data_inicio(dias),),
@@ -1084,6 +1506,10 @@ def movimentacoes_recentes(limite: int = 15) -> list[dict]:
         SELECT v.data, 'Venda', p.nome, v.quantidade, 'pratos', ''
         FROM vendas_diarias v JOIN pratos p ON p.id = v.prato_id
         UNION ALL
+        SELECT pr.data, 'Produção', i.nome, pr.quantidade_produzida, i.unidade_medida,
+               COALESCE(pr.observacao, '')
+        FROM producoes pr JOIN insumos i ON i.id = pr.insumo_id
+        UNION ALL
         SELECT cf.data, 'Contagem', i.nome, cf.quantidade_contada, i.unidade_medida,
                COALESCE(cf.observacao, '')
         FROM contagens_fisicas cf JOIN insumos i ON i.id = cf.insumo_id
@@ -1105,11 +1531,13 @@ def movimentacoes_recentes(limite: int = 15) -> list[dict]:
 # um insumo. Tudo que estava disponível no período teve um de três
 # destinos, e os três somam exatamente o que havia:
 #
-#     disponível  =  estoque inicial + compras
+#     disponível  =  estoque inicial + entradas (compras e produção)
 #     disponível  =  consumo + sobra + perda
 #
-# O consumo é o teórico (vendas × ficha técnica) e a sobra é a contagem
-# seguinte. A perda é o que falta para fechar: quebra, desperdício, porção
+# O consumo é o teórico (vendas × ficha do prato, mais o que as produções
+# gastaram) e a sobra é a contagem seguinte. As chaves continuam se
+# chamando "compras" e "consumo" por compatibilidade; "compras" inclui o
+# que a cozinha produziu. A perda é o que falta para fechar: quebra, desperdício, porção
 # maior que a ficha, furo. É o número que a contagem mensal existe para
 # revelar, e ele só aparece quando há duas contagens do mesmo insumo.
 #
@@ -1117,8 +1545,9 @@ def movimentacoes_recentes(limite: int = 15) -> list[dict]:
 # (exclusive). Isso segue a convenção do resto do sistema — uma contagem
 # mede o estoque antes dos movimentos do próprio dia, e por isso os
 # movimentos do dia da contagem final já pertencem ao período seguinte.
-SQL_RECONCILIACAO = """
-    WITH periodos AS (
+SQL_RECONCILIACAO = f"""
+    WITH movimentos AS ({SQL_MOVIMENTOS}),
+    periodos AS (
         SELECT
             c.insumo_id,
             c.data AS inicio,
@@ -1139,16 +1568,14 @@ SQL_RECONCILIACAO = """
         p.estoque_inicial,
         p.estoque_final,
         COALESCE((
-            SELECT SUM(co.quantidade) FROM compras co
-            WHERE co.insumo_id = p.insumo_id
-              AND co.data >= p.inicio AND co.data < p.fim
+            SELECT SUM(m.entrada) FROM movimentos m
+            WHERE m.insumo_id = p.insumo_id
+              AND m.data >= p.inicio AND m.data < p.fim
         ), 0) AS compras,
         COALESCE((
-            SELECT SUM(v.quantidade * ft.quantidade_por_prato)
-            FROM vendas_diarias v
-            JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-            WHERE ft.insumo_id = p.insumo_id
-              AND v.data >= p.inicio AND v.data < p.fim
+            SELECT SUM(m.saida) FROM movimentos m
+            WHERE m.insumo_id = p.insumo_id
+              AND m.data >= p.inicio AND m.data < p.fim
         ), 0) AS consumo
     FROM periodos p
     JOIN insumos i ON i.id = p.insumo_id
@@ -1291,20 +1718,20 @@ def segunda_da_semana(data: datetime.date = None) -> datetime.date:
 def saida_por_periodo(inicio: str, fim: str) -> list[dict]:
     """Quanto de cada insumo saiu do estoque entre duas datas, com o saldo atual.
 
-    A saída é o consumo teórico: vendas lançadas × ficha técnica. Vem
-    junto o estoque atual de cada insumo, porque as duas perguntas são
-    feitas ao mesmo tempo — quanto saiu e quanto ainda tem.
+    A saída é o consumo teórico: vendas lançadas × ficha do prato, mais o
+    que as produções do período gastaram. Vem junto o estoque atual de
+    cada insumo, porque as duas perguntas são feitas ao mesmo tempo —
+    quanto saiu e quanto ainda tem.
     """
     conn = get_connection()
     linhas = conn.execute(
-        """
+        f"""
         SELECT i.nome AS insumo,
                i.unidade_medida,
-               SUM(v.quantidade * ft.quantidade_por_prato) AS saida
-        FROM vendas_diarias v
-        JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
-        JOIN insumos i ON i.id = ft.insumo_id
-        WHERE v.data >= ? AND v.data <= ?
+               SUM(m.saida) AS saida
+        FROM ({SQL_MOVIMENTOS}) m
+        JOIN insumos i ON i.id = m.insumo_id
+        WHERE m.data >= ? AND m.data <= ? AND m.saida > 0
         GROUP BY i.id, i.nome, i.unidade_medida
         ORDER BY saida DESC
         """,

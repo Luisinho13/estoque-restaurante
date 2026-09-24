@@ -44,14 +44,23 @@ contar toda semana.
 
 ```
 estoque atual = última contagem física
-              + compras registradas a partir dessa data (inclusive)
-              − consumo (vendas × ficha técnica), também a partir
-                dessa data (inclusive)
+              + compras e produções a partir dessa data (inclusive)
+              − vendas × ficha do prato, também a partir dessa data
+              − o que cada produção gastou dos ingredientes
 ```
 
 A ficha técnica de cada prato diz quanto de cada insumo é consumido por
 unidade vendida. Com as vendas do dia lançadas, o sistema já sabe quanto
 saiu de cada ingrediente.
+
+A cozinha trabalha em dois tempos, e o sistema também. O molho ao sugo é
+feito numa segunda-feira, em panela de 80 kg de tomate, e servido a semana
+inteira. Por isso há duas fichas: a do **prato** (a parmegiana leva o bife
+empanado, o molho e o queijo) e a da **produção** (o molho leva o tomate,
+a cebola e o salsão). Vender a parmegiana tira o molho do estoque; fazer
+o molho tira o tomate. Assim o molho pronto na câmara também tem saldo e
+é contado, e o tomate sai no dia em que foi usado, não aos poucos, a
+cada prato vendido.
 
 Não houve integração com a Zig, o PDV do restaurante — não há API pública
 documentada. Então **as vendas são lançadas à mão, todo dia**. Isso deixou
@@ -110,14 +119,29 @@ não olhar.
   nota não bate com a unidade controlada (caixa → unidade, por exemplo).
   Nas próximas notas do mesmo fornecedor, o produto é reconhecido sozinho
 
+**Produção**
+- **Lançar Produção**: o molho, a base ou a carne porcionada que a cozinha
+  fez. Quem lança diz quantas receitas fez e confere quanto rendeu; entra
+  o produzido e sai o que a receita gasta. O que sai depende só da
+  receita e do número de receitas — o rendimento vem preenchido e pode
+  ser corrigido, porque na planilha da cozinha ele está errado em vários
+  molhos. A segunda leva do mesmo item no mesmo dia pede confirmação, e
+  uma leva lançada errado pode ser apagada, devolvendo os ingredientes
+
 **Cadastros**
-- Insumo, prato e ficha técnica um a um, pelo formulário
+- Insumo e prato um a um, pelo formulário. Cada insumo é **cru**
+  (comprado, entra pela nota) ou **produção** (feito na cozinha)
+- **Ficha Técnica** editável em tabela, para o prato (por porção) e para a
+  produção (por receita, com o rendimento). Troca a quantidade, acrescenta
+  e tira insumo, e grava a ficha inteira de uma vez. Uma produção pode
+  levar outra (o molho de queijo leva bechamel), e a tela recusa a receita
+  que depende de si mesma por um caminho torto
 - Importação das **planilhas de ficha técnica** da cozinha (a de pratos
-  finais e a de produção): cada aba vira um prato, e as receitas de
-  produção — molhos, bases, bolinhos — são abertas nos ingredientes de
-  compra, para o consumo cair em cima do que entra pela nota fiscal.
-  Nada é gravado antes da prévia, que mostra o que vai ser criado e cada
-  ponto em que a planilha estava ambígua
+  finais e a de produção): cada aba de prato vira a ficha do prato, e cada
+  aba de produção vira um item de produção com a própria receita. Nada é
+  gravado antes da prévia, que mostra o que vai ser criado e cada ponto
+  em que a planilha estava ambígua. Depois da primeira carga, a fonte da
+  verdade é o sistema, e reimportar avisa que sobrescreve o editado
 
 **Saídas de estoque**
 - Importação das vendas do **PDV (Zig)** a partir da planilha exportada:
@@ -700,6 +724,7 @@ estoque-restaurante/
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
 ├── exemplos.py       # gera a nota fiscal e o relatório de PDV fictícios
 ├── seed_demo.py      # gera um banco de demonstração
+├── backup_nuvem.py   # copia todas as tabelas do banco para um JSON local
 ├── migrar_para_nuvem.py   # copia o banco local para o Postgres
 ├── diagnostico.py    # inspeção de dados de um prato ou insumo
 └── requirements.txt
@@ -708,6 +733,47 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.11 — A produção separada do prato
+
+- **A venda desconta só o que vai no prato.** Até aqui as receitas de
+  produção eram abertas nos ingredientes crus, e a venda de uma
+  parmegiana tirava do estoque o tomate, a cebola e o salsão do molho.
+  Testando, isso ficou estranho: o molho pronto não existia no sistema, e
+  o tomate saía aos poucos, prato a prato, em vez de no dia em que a
+  panela foi feita. Agora cada receita de produção é um item de estoque:
+  a parmegiana desconta o molho ao sugo, e o molho desconta o tomate
+  quando é produzido
+- **Tela Lançar Produção**, em Lançamentos: quantas receitas, quanto
+  rendeu, e a prévia do que sai de cada ingrediente e do saldo atual
+  dele. O que a leva gastou fica gravado no lançamento, então editar a
+  receita depois não muda o passado. Histórico dos últimos 30 dias, com o
+  que cada leva gastou e a opção de apagar uma leva errada
+- **Insumo cru ou produção.** A tela de Insumos separa as duas listas e
+  permite trocar o tipo de um insumo; o Painel de Estoque filtra por tipo
+- **Ficha Técnica editável**, para prato e para produção, numa tabela
+  que acrescenta, troca e apaga linhas. Tudo ou nada ao gravar. Com isso
+  a fonte da verdade da ficha passa a ser o sistema, não a planilha
+- **Importação no modelo novo.** As 33 abas da planilha de produção e as
+  2 abas de produção da planilha de pratos viram 35 produções com
+  receita. Os molhos que a contagem já contava (molho ao sugo, pesto,
+  molho de maracujá, dadinho, bolinho de abóbora) viram produção com o
+  mesmo nome e na mesma unidade da contagem, para a contagem de segunda
+  cair neles. Rendimento absurdo na planilha (molho de mostarda rendendo
+  26 kg de 0,64 kg de ingredientes) é trocado pela soma dos ingredientes,
+  com aviso. Água sai das receitas: não é item de estoque
+- **Corrigido: o molho de strogonoff levava molho de mostarda.** A
+  receita cita "molho de tomate", que é o nome escrito dentro da aba do
+  molho ao sugo — e, por erro de cópia, também dentro da aba do molho de
+  mostarda, que era achada primeiro
+- **Chopp contado em litro**, não em barril. O barril aberto está pela
+  metade, e "1 barril" não diz quanto sobrou. Reimportar a planilha de
+  contagem troca a unidade dos quatro chopps sozinha, porque ela só troca
+  unidade de insumo sem nenhum histórico (compra, contagem, produção,
+  ficha ou nota fiscal). Com histórico, a troca continua bloqueada: 2
+  barris virariam 2 litros
+- `backup_nuvem.py`: copia todas as tabelas do banco para um JSON local
+  antes de uma mudança grande. Só lê
 
 ### v0.10.1 — Prato cancelado não é prato vendido
 
@@ -826,6 +892,9 @@ feito vira um número errado com cara de certo.
   estão sendo gravados
 
 ### v0.7 — Ficha técnica por planilha
+
+> A abertura das receitas de produção no cru, descrita abaixo, foi
+> substituída na v0.11 pela produção como item de estoque.
 
 - Tela **Importar Ficha Técnica**: as duas planilhas da cozinha (pratos
   finais e produção) viram insumo, prato e receita de uma vez só, com

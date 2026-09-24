@@ -1,7 +1,7 @@
 """
 seed_demo.py
 Gera um banco de demonstração com dados realistas de um restaurante:
-60 dias de vendas, compras, ficha técnica e contagens físicas.
+60 dias de vendas, compras, produções, ficha técnica e contagens físicas.
 
 Serve para ver o dashboard cheio (e tirar print para divulgação) sem
 encostar no banco real. Rodar com:
@@ -74,7 +74,20 @@ INSUMOS = [
     ("Manteiga", "kg"),
     ("Cerveja long neck", "un"),
     ("Refrigerante lata", "un"),
+    ("Molho de tomate", "kg"),
 ]
+
+# Itens feitos na cozinha. Entram pela produção, não pela compra, e a
+# produção é que tira o tomate e a cebola do estoque — a pizza desconta só
+# o molho.
+PRODUCOES = {
+    "Molho de tomate": {
+        "rendimento": 5.0,
+        "receita": {"Tomate": 6.0, "Cebola": 1.0, "Alho": 0.1, "Azeite": 0.2},
+    },
+}
+# De quantos em quantos dias a cozinha faz o molho.
+INTERVALO_DE_PRODUCAO = 3
 
 FICHAS = {
     "Picanha na chapa": {
@@ -94,7 +107,8 @@ FICHAS = {
     },
     "Porção de batata frita": {"Batata": 0.40, "Óleo de soja": 0.05},
     "Pizza margherita": {
-        "Farinha de trigo": 0.30, "Queijo mussarela": 0.20, "Tomate": 0.15, "Azeite": 0.02,
+        "Farinha de trigo": 0.30, "Queijo mussarela": 0.20, "Molho de tomate": 0.12,
+        "Azeite": 0.02,
     },
     "Hambúrguer artesanal": {
         "Contrafilé": 0.18, "Queijo mussarela": 0.04, "Farinha de trigo": 0.08,
@@ -175,25 +189,60 @@ def gerar_vendas():
     return vendas
 
 
-def consumo_entre(vendas, inicio, fim=None):
+def _no_intervalo(data, inicio, fim):
+    return data >= inicio and (fim is None or data < fim)
+
+
+def gerar_producoes(vendas):
+    """Levas de cada produção, feitas a cada poucos dias no volume que as
+    vendas dos dias seguintes vão pedir, arredondado para meia receita."""
+    levas = []
+    for producao, dados in PRODUCOES.items():
+        inicio = DIA_CONTAGEM_ANTERIOR
+        while inicio <= HOJE:
+            fim = inicio + datetime.timedelta(days=INTERVALO_DE_PRODUCAO)
+            pedido = sum(
+                quantidade * FICHAS[prato].get(producao, 0)
+                for prato, quantidade, data in vendas
+                if _no_intervalo(data, inicio, fim)
+            )
+            receitas = max(round(pedido / dados["rendimento"] * 2) / 2, 0.5)
+            rendeu = round(receitas * dados["rendimento"] * random.uniform(0.95, 1.03), 2)
+            levas.append((producao, receitas, rendeu, inicio))
+            inicio = fim
+    return levas
+
+
+def consumo_entre(vendas, inicio, fim=None, levas=()):
     """Consumo de cada insumo no intervalo [inicio, fim).
 
-    O fim é exclusivo de propósito: uma contagem mede o estoque antes dos
-    movimentos do próprio dia, então as vendas do dia da contagem final já
-    pertencem ao período seguinte. É a mesma convenção do crud.py.
+    Soma o que as vendas tiram (pela ficha do prato) e o que as produções
+    gastam dos ingredientes. O fim é exclusivo de propósito: uma contagem
+    mede o estoque antes dos movimentos do próprio dia, então as vendas do
+    dia da contagem final já pertencem ao período seguinte. É a mesma
+    convenção do crud.py.
     """
     total = {}
     for prato, quantidade, data in vendas:
-        if data < inicio or (fim is not None and data >= fim):
+        if not _no_intervalo(data, inicio, fim):
             continue
         for insumo, por_prato in FICHAS[prato].items():
             total[insumo] = total.get(insumo, 0) + quantidade * por_prato
+    for producao, receitas, _, data in levas:
+        if not _no_intervalo(data, inicio, fim):
+            continue
+        for insumo, por_receita in PRODUCOES[producao]["receita"].items():
+            total[insumo] = total.get(insumo, 0) + receitas * por_receita
     return total
 
 
-def consumo_desde(vendas, inicio):
+def produzido_entre(levas, producao, inicio, fim=None):
+    return sum(r for p, _, r, d in levas if p == producao and _no_intervalo(d, inicio, fim))
+
+
+def consumo_desde(vendas, inicio, levas=()):
     """Atalho para o consumo de uma data em diante."""
-    return consumo_entre(vendas, inicio)
+    return consumo_entre(vendas, inicio, levas=levas)
 
 
 def arredondar(valor, unidade):
@@ -249,15 +298,25 @@ def main():
     database.criar_tabelas()
 
     vendas = gerar_vendas()
-    consumo_periodo = consumo_desde(vendas, DIA_CONTAGEM)
+    levas = gerar_producoes(vendas)
+    consumo_periodo = consumo_desde(vendas, DIA_CONTAGEM, levas)
     # O primeiro período é o que a tela de perdas reconcilia, então ele
     # precisa fechar de verdade: estoque inicial, compras e vendas que se
     # combinam, e uma perda plausível explicando o que falta.
-    consumo_anterior = consumo_entre(vendas, DIA_CONTAGEM_ANTERIOR, DIA_CONTAGEM)
+    consumo_anterior = consumo_entre(vendas, DIA_CONTAGEM_ANTERIOR, DIA_CONTAGEM, levas)
 
     for nome, unidade in INSUMOS:
         media_diaria = consumo_periodo.get(nome, 0) / 30
-        crud.cadastrar_insumo(nome, unidade, arredondar(media_diaria * DIAS_DE_MINIMO, unidade))
+        crud.cadastrar_insumo(
+            nome, unidade, arredondar(media_diaria * DIAS_DE_MINIMO, unidade),
+            tipo="producao" if nome in PRODUCOES else "cru",
+        )
+    for producao, dados in PRODUCOES.items():
+        crud.salvar_ficha_da_producao(
+            producao,
+            [{"insumo": i, "quantidade": q} for i, q in dados["receita"].items()],
+            dados["rendimento"],
+        )
 
     for prato, ficha in FICHAS.items():
         crud.cadastrar_prato(prato)
@@ -266,6 +325,8 @@ def main():
 
     for prato, quantidade, data in vendas:
         crud.registrar_venda_diaria(prato, quantidade, str(data))
+    for producao, receitas, rendeu, data in levas:
+        crud.registrar_producao(producao, receitas, rendeu, str(data))
 
     for nome, unidade in INSUMOS:
         media_diaria = consumo_periodo.get(nome, 0) / 30
@@ -277,10 +338,15 @@ def main():
         # Primeiro período: compra para repor o que foi consumido, e o que
         # sobra na contagem seguinte é o que restou depois da perda.
         gasto = consumo_anterior.get(nome, 0)
-        comprado = gerar_compras(
-            nome, unidade, gasto * random.uniform(0.95, 1.15),
-            inicio=DIA_CONTAGEM_ANTERIOR, duracao=(DIA_CONTAGEM - DIA_CONTAGEM_ANTERIOR).days,
-        )
+        if nome in PRODUCOES:
+            # O que é feito na cozinha não se compra: entrou pelas levas.
+            comprado = produzido_entre(levas, nome, DIA_CONTAGEM_ANTERIOR, DIA_CONTAGEM)
+        else:
+            comprado = gerar_compras(
+                nome, unidade, gasto * random.uniform(0.95, 1.15),
+                inicio=DIA_CONTAGEM_ANTERIOR,
+                duracao=(DIA_CONTAGEM - DIA_CONTAGEM_ANTERIOR).days,
+            )
         disponivel = inicial + comprado
         taxa = PERDA_NO_PERIODO.get(nome, random.uniform(*PERDA_PADRAO))
         sobra = max(disponivel - gasto - disponivel * taxa, 0)
@@ -289,6 +355,8 @@ def main():
         )
 
         # Segundo período: em aberto, é o que alimenta o "o que acaba primeiro".
+        if nome in PRODUCOES:
+            continue
         proporcao = COMPRA_ABAIXO_DO_CONSUMO.get(nome, random.uniform(1.0, 1.25))
         gerar_compras(nome, unidade, consumo_periodo.get(nome, 0) * proporcao)
 
@@ -299,7 +367,8 @@ def main():
 
     print(f"Banco de demonstração criado em: {CAMINHO_DEMO}")
     print(f"Entre no app com  usuário: {USUARIO_DEMO}  senha: {SENHA_DEMO}")
-    print(f"{len(INSUMOS)} insumos, {len(FICHAS)} pratos, {len(vendas)} lançamentos de venda\n")
+    print(f"{len(INSUMOS)} insumos, {len(FICHAS)} pratos, {len(vendas)} lançamentos de venda, "
+          f"{len(levas)} produções\n")
     print(f"{'Insumo':<20} {'Estoque':>9} {'Mínimo':>9} {'Dias':>7}  Status")
     for linha in sorted(
         crud.cobertura_estoque(30),
