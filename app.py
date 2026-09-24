@@ -6,6 +6,7 @@ Rodar com: streamlit run app.py
 """
 
 import datetime
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -28,6 +29,41 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Depois de um push, o Streamlit Cloud troca os arquivos, mas o processo que
+# já estava no ar pode seguir com a versão antiga dos módulos na memória: o
+# app.py é relido a cada execução, os módulos importados não. Em 24/09 isso
+# rodou o app.py novo com o ficha_import antigo — deu KeyError, por sorte
+# antes de gravar. Com crud antigo e tela nova, um lançamento gravaria pela
+# regra velha sem erro nenhum. Cada módulo guarda a data do arquivo que ele
+# carregou; se o arquivo no disco mudou desde então, o processo está velho.
+MODULOS_DO_APP = (database, auth, contagem_import, crud, exemplos, ficha_import,
+                  nfe_import, zig_import)
+
+
+def _modulos_desatualizados():
+    velhos = []
+    for modulo in MODULOS_DO_APP:
+        no_disco = Path(modulo.__file__).stat().st_mtime
+        carregado = getattr(modulo, "_data_do_arquivo_carregado", None)
+        if carregado is None:
+            modulo._data_do_arquivo_carregado = no_disco
+        elif carregado != no_disco:
+            velhos.append(modulo.__name__)
+    return velhos
+
+
+_velhos = _modulos_desatualizados()
+if _velhos:
+    st.title("📦 Controle de Estoque")
+    st.error(
+        "**O sistema foi atualizado e precisa ser reiniciado** antes de usar. "
+        "Até lá nada é gravado, para não misturar a versão nova com a antiga. "
+        "Quem administra o app: *Manage app* → ⋮ → *Reboot app*.",
+        icon=":material/restart_alt:",
+    )
+    st.caption("Módulos desatualizados: " + ", ".join(_velhos))
+    st.stop()
 
 # O banco na nuvem dorme quando fica sem uso, e acordá-lo leva alguns
 # segundos. Quando nem assim ele responde, quem abriu o app precisa ver o
