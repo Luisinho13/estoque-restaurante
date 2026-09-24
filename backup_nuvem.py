@@ -29,7 +29,16 @@ def main():
     conn = database.get_connection()
     dados = {}
     for tabela in TABELAS:
-        linhas = conn.execute(f"SELECT * FROM {tabela}").fetchall()
+        # O esquema do código pode estar à frente do banco: uma tabela nova
+        # só é criada quando o app novo abre pela primeira vez. Ela ainda
+        # não tem dado nenhum, então fica de fora do backup em vez de
+        # derrubá-lo. O rollback limpa a transação que o Postgres abortou.
+        try:
+            linhas = conn.execute(f"SELECT * FROM {tabela}").fetchall()
+        except Exception:
+            conn.rollback()
+            print(f"  {tabela}: ainda não existe neste banco (pulada)")
+            continue
         dados[tabela] = [dict(linha) for linha in linhas]
         print(f"  {tabela}: {len(linhas)}")
     conn.close()
