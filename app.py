@@ -3219,7 +3219,15 @@ def pagina_producao():
             f"{data.strftime('%d/%m/%Y')}, somando {ja_lancado['produzido']:g} {unidade}.",
             icon=":material/content_copy:",
         )
-        confirmado = st.checkbox("É outra leva, quero somar", key="producao_outra_leva")
+        # O número de levas entra na chave: depois de lançar, a caixa volta
+        # desmarcada e a leva seguinte pede confirmação de novo. Tirar a
+        # chave da sessão não bastava — o navegador devolvia o valor marcado
+        # na execução seguinte, e o botão ficava liberado (visto no teste
+        # pelo navegador em 24/09).
+        confirmado = st.checkbox(
+            "É outra leva, quero somar",
+            key=f"producao_outra_leva_{producao}_{data.isoformat()}_{ja_lancado['levas']}",
+        )
 
     if st.button("🍳 Lançar produção", type="primary",
                  disabled=rendeu <= 0 or not confirmado):
@@ -3232,7 +3240,6 @@ def pagina_producao():
                 f"Lançado: {rendeu:g} {unidade} de {producao} em "
                 f"{data.strftime('%d/%m/%Y')}, gastando {receitas:g} receita(s)."
             )
-            st.session_state.pop("producao_outra_leva", None)
             st.rerun()
 
     _historico_de_producao()
