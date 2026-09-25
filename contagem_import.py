@@ -340,8 +340,8 @@ ALIMENTOS = {
     "MIX DE LINGUIÇAS DO INTERIOR PCT 500G (CANCIAN)": _i("Mix de linguiças", 1, "kg"),
     # LEGUMES CONGELADOS
     "ALHO DESCASCADO CONGELADO KG": _i("Alho", 1, "kg"),
-    "BATATA CANOA MCCAIN": _i("Batata", 1, "kg"),
-    "BATATA NOISETE MCCAIN": _i("Batata", 1, "kg"),
+    "BATATA CANOA MCCAIN": _i("Batata canoa", 1, "kg"),
+    "BATATA NOISETE MCCAIN": _i("Batata noisete", 1, "kg"),
     # MASSAS
     "MASSA FOLHADA AROSA 2KG": _i("Massa folhada", 2, "kg"),
     "LASANHA": _i("Lasanha", 1, "un"),
@@ -373,8 +373,8 @@ ALIMENTOS = {
     "ALHO ROXO": _i("Alho", 1, "kg"),
     "BANANA DA TERRA": _i("Banana-da-terra", 1, "caixa"),
     "BANANA NANICA DUZIA (VERDE)": _i("Banana", 20, "kg"),
-    "BATATA ASTERIX KG PCT 25KG": _i("Batata", 1, "kg"),
-    "BATATA INGLESA PCT 25KG": _i("Batata", 1, "kg"),
+    "BATATA ASTERIX KG PCT 25KG": _i("Batata asterix", 1, "kg"),
+    "BATATA INGLESA PCT 25KG": _i("Batata inglesa", 1, "kg"),
     "BERINGELA": _i("Berinjela", 1, "kg"),
     "BETERRABA": _i("Beterraba", 1, "kg"),
     "BROCOLIS PORCIONADO": _i("Brócolis", 1, "kg"),
@@ -434,7 +434,7 @@ ALIMENTOS = {
     "Molho dr pimenta": _i("Molho de pimenta da casa", 1, "bandeja"),
     # MOLHOS e PORÇÕES — preparos da própria cozinha. Os que a ficha
     # técnica já explode no ingrediente cru seguem NOMES_CANONICOS
-    # (purê de batata é Batata); os outros são insumos à parte, que só
+    # (purê de batata é Batata inglesa); os outros são insumos à parte, que só
     # se movem pela contagem.
     "MOHO AO SUGO": _i("Molho ao sugo", 1, "kg"),
     "MOLHO ROTI": _i("Molho roti", 1, "kg"),
@@ -443,7 +443,7 @@ ALIMENTOS = {
     "PURE DE BANANA NANICA": _i("Banana", 1, "kg"),
     "PESTO": _i("Pesto", 1, "kg"),
     "PURE DE MANDIOCA": _i("Purê de mandioca", 1, "kg"),
-    "PURE DE BATATA (pesto berinjela)": _i("Batata", 1, "kg"),
+    "PURE DE BATATA (pesto berinjela)": _i("Batata inglesa", 1, "kg"),
     "CROQUETA COSTELA": _i("Croqueta de costela", 0.3, "kg"),
     "Bolinho de Pernil": _i("Bolinho de pernil", 1, "pacote"),
     "BOLINHO DE CAMARÃO": _i("Bolinho de camarão", 0.3, "kg"),

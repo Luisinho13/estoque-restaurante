@@ -917,7 +917,7 @@ def pagina_painel():
         return [cor] * len(row)
 
     estilo = df.style.apply(destacar_baixo, axis=1).format(
-        {"Estoque atual": "{:.1f}", "Estoque mínimo": "{:.1f}"}
+        {"Estoque atual": "{:.2f}", "Estoque mínimo": "{:.2f}"}
     )
     st.dataframe(estilo, width="stretch")
 
@@ -937,7 +937,7 @@ def pagina_painel():
         with col1:
             st.write(f"**{nome}**")
         with col2:
-            st.write(f"{item['estoque_atual']:.1f}")
+            st.write(f"{item['estoque_atual']:.2f}")
         with col3:
             st.write(item["unidade_medida"])
         with col4:

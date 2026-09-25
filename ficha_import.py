@@ -106,13 +106,17 @@ NOMES_CANONICOS = {
     "amora": "Amora",
     "banana": "Banana",
     "banana nanica": "Banana",
-    "batata": "Batata",
-    "batata asterix": "Batata",
-    "batata canoa": "Batata",
-    "batata noisete": "Batata",
-    "fritas": "Batata",
-    "fritas canoa": "Batata",
-    "pure de batata": "Batata",
+    # Batata são quatro produtos de preço e compra diferentes (25/09, pedido
+    # do usuário): canoa e noisete vêm congeladas da McCain, inglesa e
+    # asterix são in natura. As fritas das parmegianas são a canoa.
+    "batata": "Batata inglesa",
+    "batata inglesa": "Batata inglesa",
+    "pure de batata": "Batata inglesa",
+    "batata asterix": "Batata asterix",
+    "batata canoa": "Batata canoa",
+    "fritas": "Batata canoa",
+    "fritas canoa": "Batata canoa",
+    "batata noisete": "Batata noisete",
     "batata palha": "Batata palha",
     "chips de batata": "Batata palha",
     "beringela": "Berinjela",
@@ -422,12 +426,10 @@ APELIDOS_INCERTOS = {
 MAPEAMENTOS_ASSUMIDOS = {
     "bombom de alcatra": "o bombom é alcatra porcionada",
     "file aperitivo": "o filé aperitivo é mignon em cubos",
-    "pure de batata": "o purê é batata",
+    "batata": "a batata sem tipo é a inglesa",
+    "pure de batata": "o purê é batata inglesa",
     "pure de mandiqouinha": "o purê é mandioquinha",
-    "fritas": "fritas são batata",
-    "fritas canoa": "fritas canoa são batata",
-    "batata canoa": "batata canoa é batata",
-    "batata noisete": "batata noisete é batata",
+    "fritas": "as fritas são batata canoa",
 }
 
 

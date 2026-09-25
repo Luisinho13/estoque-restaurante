@@ -734,6 +734,21 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
 
+### v0.11.1 — Quatro batatas
+
+- **A batata virou quatro insumos: canoa, noisete, inglesa e asterix.**
+  Todas caíam num único "Batata", mas canoa e noisete vêm congeladas da
+  McCain e inglesa e asterix são in natura: preço, fornecedor e ritmo de
+  consumo diferentes, somados num saldo que não dizia nada. As fritas das
+  parmegianas são a canoa; o purê e a batata do caldinho, a inglesa. A
+  ficha técnica e as linhas da contagem apontam para o insumo certo ao
+  reimportar
+- **Painel de Estoque com duas casas decimais.** Com uma, 0,04 kg
+  aparecia como 0,0
+- **Menos idas ao banco por clique**, de 55–82 para 12–23. A conexão
+  passou a ser guardada por sessão, não por thread: o Streamlit abre uma
+  thread a cada clique, e cada uma abria uma conexão nova com o banco
+
 ### v0.11 — A produção separada do prato
 
 - **A venda desconta só o que vai no prato.** Até aqui as receitas de
