@@ -171,7 +171,10 @@ ALIMENTOS = {
     "MOSTARDA L ' ANCIENE": _i("Mostarda", 0.5, "kg"),
     "MOSTARDA SACHET CAIXA (HEINZ)": _i("Mostarda em sachê", 1, "caixa"),
     "NACHOS - CANAPES(EMBALAGEM 250GR)": _i("Nachos", 0.25, "kg"),
-    "OLEO ALGODAO BLD 15 LTS/ 15,8 KG": _i("Óleo", 15, "l"),
+    # A equipe conta o óleo de algodão em litro e o ovo em unidade, não no
+    # balde e na caixa da planilha: na contagem de 28/09/2026 vieram "43,5"
+    # e "360", que viraram 652 l e 108.000 ovos. Confirmado pelo usuário.
+    "OLEO ALGODAO BLD 15 LTS/ 15,8 KG": _i("Óleo", 1, "l", "l"),
     "OLEO DE GERGILIM TORRADO 1 L": _i("Óleo de gergelim", 1, "l"),
     "OLEO SOJA 900 ML": _i("Óleo", 0.9, "l"),
     "PAÇOCA SANTA HELENA CX C/100UN": _i("Paçoca", 100, "un"),
@@ -422,7 +425,7 @@ ALIMENTOS = {
     "MELANCIA": _i("Melancia", 1, "un"),
     "MILHO VERDE": _i("Milho verde", 1, "bandeja"),
     "MORANGO CAIXA GRANDE COM 4 CAIXINHAS": _i("Morango", 0.5, "kg", "bandeja"),
-    "OVOS BANDEJA C/ 30 UND (CX C/ 10 BDJ) - TAMANHO JUMBO/EXTRA": _i("Ovo", 300, "un"),
+    "OVOS BANDEJA C/ 30 UND (CX C/ 10 BDJ) - TAMANHO JUMBO/EXTRA": _i("Ovo", 1, "un", "un"),
     "PEPINO JAPONÊS": _i("Pepino", 1, "kg"),
     "PIMENTÃO VERDE": _i("Pimentão", 1, "kg"),
     "PIMENTAO AMARELO": _i("Pimentão", 1, "kg"),
