@@ -142,6 +142,13 @@ não olhar.
   gravado antes da prévia, que mostra o que vai ser criado e cada ponto
   em que a planilha estava ambígua. Depois da primeira carga, a fonte da
   verdade é o sistema, e reimportar avisa que sobrescreve o editado
+- **Ficha do bar**, na mesma tela, em aba própria: cada drink da planilha
+  do bar vira um prato do setor bar, e caldas, xarope e espuma viram
+  produção do bar. A planilha dá a dose em litro (50 ml de gin) e o
+  estoque conta a garrafa; a conversão usa o volume escrito no nome do
+  insumo, então 50 ml de "Gin Bombay 750 ml" descontam 0,067 garrafa.
+  Onde o nome não diz o volume, ou a erva é contada em maço, a quantidade
+  entra como está e a prévia avisa — o sistema não chuta peso de maço
 
 **Saídas de estoque**
 - Importação das vendas do **PDV (Zig)** a partir da planilha exportada:
@@ -149,7 +156,8 @@ não olhar.
   ligado uma vez a um prato — ou marcado como "não controlar", no caso de
   couvert, bebida e itens de loja
 - Lançamento do **dia inteiro numa tabela só**: todos os pratos de uma vez,
-  com filtro por nome, já preenchida com o que está gravado naquela data.
+  com filtro por nome e por setor (cozinha ou bar, para cada um lançar o
+  seu), já preenchida com o que está gravado naquela data.
   Em branco não mexe no prato; zero apaga o lançamento dele no dia. É a
   tela do dia a dia — prato a prato seriam dezenas de envios por noite, e
   o que não cabe na rotina acaba não sendo lançado
@@ -170,7 +178,8 @@ não olhar.
   do estoque na semana. Quanto de cada insumo saiu, quais pratos geraram
   essa saída, quanto cada dia pesou, e quais dias do período **não têm
   venda lançada**, que é a falha que o lançamento manual produz sem dar
-  erro nenhum
+  erro nenhum. Separa a **saída do bar** da saída da cozinha: a do bar é o
+  que os drinks vendidos e os preparos do bar tiraram do estoque
 - **Dashboard** com indicadores do período, consumo por insumo, curva de
   vendas por dia, ranking de pratos e movimentações recentes
 - **"O que acaba primeiro"**: estimativa de em quantos dias cada insumo
@@ -183,7 +192,9 @@ não olhar.
   várias linhas somam no mesmo insumo (alcatra em peça, porcionada na
   câmara e porcionada na cozinha). Antes de gravar, a tela mostra o total
   de cada insumo ao lado do estoque teórico; ao gravar, quais divergiram e
-  em quanto. Regravar corrige o dia em vez de empilhar contagens
+  em quanto. Regravar corrige o dia em vez de empilhar contagens, e a
+  contagem de um dia pode ser apagada inteira, com confirmação — os
+  insumos voltam a partir da contagem anterior
 - **Itens da Contagem**: importa a planilha de contagem (só alimentos e
   bebidas — limpeza, descartáveis, escritório e utensílios ficam de fora)
   e é onde se preenche o fator das linhas cujo peso a planilha não diz
@@ -572,6 +583,34 @@ O teste automatizado das telas não pegava isso: ele não dirige o
 `data_editor` e não reproduz a execução extra que o navegador dispara.
 Foi preciso clicar e digitar numa tabela de verdade.
 
+### A contagem que levava minutos para gravar
+
+Na primeira semana de uso de verdade, a contagem completa — quase
+seiscentas linhas — demorava minutos para gravar, com o botão girando e
+ninguém sabendo se tinha dado certo.
+
+O banco não era lento. O que pesava era o número de conversas com ele: a
+gravação fazia, para cada linha, uma consulta para achar o insumo, uma
+para apagar o que havia no dia e uma para inserir o novo. Numa contagem
+completa, 1.449 idas ao banco, e cada ida atravessa o continente — o app
+roda nos Estados Unidos, o banco fica em São Paulo. Num arquivo local isso
+não se nota; na nuvem, são minutos.
+
+Agora a mesma gravação faz 11 idas: os insumos são lidos de uma vez, e as
+linhas são apagadas e inseridas em lotes de duzentas, numa transação só.
+O resultado foi comparado com o da versão antiga, linha por linha, no
+SQLite e no Postgres, e é idêntico. O mesmo tratamento valeu para a venda
+do dia (de 166 para 4 idas), os fatores da contagem, os mínimos e a nota
+digitada à mão.
+
+Havia um segundo atraso, menor e mais irritante: cada número digitado na
+tabela refazia a página inteira, relendo do banco o estoque de todos os
+insumos e a planilha da contagem. A tabela passou a rodar num fragmento,
+que refaz só ela, sem ir ao banco até o botão de gravar.
+
+A lição é a mesma da conexão por clique: em banco remoto, o que custa é
+quantas vezes se pergunta, não o tamanho da pergunta.
+
 ### O fio que liga todos
 
 Nenhum desses problemas deu mensagem de erro. O estoque errado, o
@@ -718,6 +757,7 @@ estoque-restaurante/
 ├── database.py       # esquema e conexão (SQLite ou PostgreSQL)
 ├── auth.py           # login, aprovação de cadastros e permissões
 ├── ficha_import.py   # leitura das planilhas de ficha técnica → cadastros
+├── bar_import.py     # leitura da planilha do bar → drinks e preparos
 ├── contagem_import.py # leitura da planilha de contagem → itens da contagem
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
@@ -733,6 +773,30 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.12 — O bar entra no estoque
+
+- **Ficha técnica do bar.** A aba Bar de Importar Ficha Técnica lê a
+  planilha de drinks e preparos do bar: 46 drinks viram pratos do setor
+  bar, e as caldas de amora e framboesa, o xarope simples, a espuma de
+  gengibre e o lote do Conde de Campos viram produção do bar. A dose da
+  planilha, em litro, vira fração de garrafa ou de lata pelo volume
+  escrito no nome do insumo. A prévia lista cada tradução que é palpite
+  (a "tônica" é a Schweppes em lata, o "gin" sem marca é o Nicks) e cada
+  linha que parece errada na planilha: o Manhattan sem whisky, a
+  Angostura em dose em vez de gotas, a batata noisete esquecida no Fresh
+  Ginger
+- **Saída do bar.** Todo prato e toda produção têm setor, cozinha ou bar,
+  e a Saída de Estoque no Período mostra a saída de um setor ou dos dois.
+  A Venda do Dia filtra a tabela por setor, para o bar lançar os drinks e
+  a cozinha os pratos, gravando tudo junto
+- **Contagem grava em segundos.** A contagem completa fazia 1.449 idas ao
+  banco e agora faz 11; a venda do dia, 166 e agora 4. Digitar na tabela
+  da contagem ou da venda não refaz mais a página inteira
+- **Apagar a contagem de um dia**, na tela de Contagem Física, com
+  confirmação
+- A demonstração ganhou uma caipirinha, e cerveja e refrigerante passaram
+  ao setor bar, para o filtro aparecer também na vitrine
 
 ### v0.11.1 — Quatro batatas
 
