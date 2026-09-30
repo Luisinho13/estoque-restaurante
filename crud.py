@@ -42,6 +42,76 @@ def hoje() -> datetime.date:
     return datetime.datetime.now(FUSO).date()
 
 
+# ---------- Gravação em lote ----------
+
+# Cada comando é uma ida ao Neon, e cada ida cruza do Streamlit Cloud (EUA)
+# até São Paulo. Gravar a contagem linha a linha — um SELECT, um DELETE e um
+# INSERT por item — passava de 2.500 idas numa contagem completa, e o botão
+# ficava minutos girando (relato do usuário em 30/09). As funções abaixo
+# fazem o mesmo trabalho com um comando por lote de linhas.
+#
+# O lote tem 200 linhas para caber no limite de parâmetros do SQLite antigo
+# (999) mesmo com quatro colunas por linha.
+LINHAS_POR_LOTE = 200
+
+
+def _em_lotes(itens: list) -> list[list]:
+    return [itens[i:i + LINHAS_POR_LOTE] for i in range(0, len(itens), LINHAS_POR_LOTE)]
+
+
+def _marcadores(quantidade: int) -> str:
+    return ", ".join("?" * quantidade)
+
+
+def _inserir_varias(conn, tabela: str, colunas: tuple, linhas: list[tuple]):
+    """INSERT de várias linhas, um comando por lote."""
+    grupo = f"({_marcadores(len(colunas))})"
+    for lote in _em_lotes(linhas):
+        conn.execute(
+            f"INSERT INTO {tabela} ({', '.join(colunas)}) "
+            f"VALUES {', '.join([grupo] * len(lote))}",
+            [valor for linha in lote for valor in linha],
+        )
+
+
+def _apagar_varias(conn, tabela: str, coluna: str, ids: list, data: str) -> int:
+    """DELETE das linhas de uma data cujo `coluna` está em `ids`."""
+    apagadas = 0
+    for lote in _em_lotes(sorted(ids)):
+        apagadas += conn.execute(
+            f"DELETE FROM {tabela} WHERE data = ? AND {coluna} IN ({_marcadores(len(lote))})",
+            [data, *lote],
+        ).rowcount
+    return apagadas
+
+
+def _atualizar_varias(conn, tabela: str, coluna: str, chave: str, valores: dict) -> set:
+    """UPDATE de `coluna` em várias linhas, cada uma com o seu valor.
+
+    `valores` é {chave: novo valor}. Devolve as chaves que existiam, para
+    quem chama recusar as que não existem. O CASE vale igual no SQLite e no
+    Postgres, o que um UPDATE ... FROM (VALUES) não vale.
+
+    Serve só para coluna numérica. O CAST é por causa do Postgres: um lote
+    em que todo valor é None (fator voltando a "a definir") deixaria o CASE
+    sem tipo, e ele cairia em texto.
+    """
+    existentes = set()
+    for lote in _em_lotes(sorted(valores)):
+        encontradas = conn.execute(
+            f"SELECT {chave} FROM {tabela} WHERE {chave} IN ({_marcadores(len(lote))})",
+            lote,
+        ).fetchall()
+        existentes |= {linha[chave] for linha in encontradas}
+        casos = " ".join("WHEN ? THEN CAST(? AS DOUBLE PRECISION)" for _ in lote)
+        conn.execute(
+            f"UPDATE {tabela} SET {coluna} = CASE {chave} {casos} END "
+            f"WHERE {chave} IN ({_marcadores(len(lote))})",
+            [v for k in lote for v in (k, valores[k])] + lote,
+        )
+    return existentes
+
+
 # ---------- Cadastros ----------
 
 TIPOS_DE_INSUMO = {"cru": "Cru (comprado)", "producao": "Produção (feito na cozinha)"}
@@ -448,6 +518,10 @@ def registrar_compras_em_lote(itens: list[dict], data: str, fornecedor: str = No
 
     conn = get_connection()
     try:
+        ids_de_insumo = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+        }
         resolvidos = []
         for item in itens:
             quantidade = float(item["quantidade"])
@@ -455,20 +529,16 @@ def registrar_compras_em_lote(itens: list[dict], data: str, fornecedor: str = No
                 raise ValueError(
                     f"A quantidade de '{item['insumo']}' precisa ser maior que zero."
                 )
-            insumo = conn.execute(
-                "SELECT id FROM insumos WHERE nome = ?", (item["insumo"],)
-            ).fetchone()
-            if not insumo:
+            if item["insumo"] not in ids_de_insumo:
                 raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
-            resolvidos.append((insumo["id"], quantidade))
+            resolvidos.append((ids_de_insumo[item["insumo"]], quantidade,
+                               data, fornecedor, observacao, numero_nota))
 
-        for insumo_id, quantidade in resolvidos:
-            conn.execute(
-                """INSERT INTO compras
-                       (insumo_id, quantidade, data, fornecedor, observacao, numero_nota)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (insumo_id, quantidade, data, fornecedor, observacao, numero_nota),
-            )
+        _inserir_varias(
+            conn, "compras",
+            ("insumo_id", "quantidade", "data", "fornecedor", "observacao", "numero_nota"),
+            resolvidos,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -699,9 +769,14 @@ def contagens_do_dia(data: str) -> dict:
 # técnica. As funções abaixo fazem essa ponte: cada linha tem um fator, e
 # o insumo recebe a soma das suas linhas convertidas.
 
-def itens_da_contagem() -> list[dict]:
-    """As linhas da planilha de contagem, na ordem dela, com o insumo de cada uma."""
-    conn = get_connection()
+def itens_da_contagem(conn=None) -> list[dict]:
+    """As linhas da planilha de contagem, na ordem dela, com o insumo de cada uma.
+
+    Recebe a conexão de quem já está no meio de uma transação; sem ela,
+    abre e fecha a sua.
+    """
+    propria = conn is None
+    conn = conn or get_connection()
     linhas = conn.execute(
         """
         SELECT ic.id, ic.descricao, ic.secao, ic.ordem, ic.unidade_contagem,
@@ -711,7 +786,8 @@ def itens_da_contagem() -> list[dict]:
         ORDER BY ic.ordem
         """
     ).fetchall()
-    conn.close()
+    if propria:
+        conn.close()
     return [dict(linha) for linha in linhas]
 
 
@@ -802,48 +878,47 @@ def registrar_contagem_pela_planilha(por_item: dict, por_insumo: dict, data: str
     Vale o mesmo contrato da contagem por insumo: tudo ou nada, e gravar
     de novo no mesmo dia substitui em vez de somar. Insumo com linha sem
     fator não é gravado (ver `resumo_da_contagem`).
+
+    São umas oito idas ao banco, qualquer que seja o tamanho da contagem
+    (ver "Gravação em lote", no topo do módulo).
     """
-    itens = itens_da_contagem()
-    resumo = resumo_da_contagem(por_item, por_insumo, itens)
-    if not resumo["totais"]:
-        raise ValueError("Nenhuma contagem que dê para gravar.")
-
-    ids_de_insumo = {}
-    gravaveis = {i["id"] for i in itens if i["insumo"] in resumo["totais"]}
-
     conn = get_connection()
     try:
+        # Os itens e os ids dos insumos são lidos pela mesma conexão, numa
+        # consulta cada, em vez de um SELECT por insumo.
+        itens = itens_da_contagem(conn)
+        resumo = resumo_da_contagem(por_item, por_insumo, itens)
+        if not resumo["totais"]:
+            raise ValueError("Nenhuma contagem que dê para gravar.")
+
+        ids_de_insumo = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+        }
         for insumo in resumo["totais"]:
-            linha = conn.execute("SELECT id FROM insumos WHERE nome = ?", (insumo,)).fetchone()
-            if not linha:
+            if insumo not in ids_de_insumo:
                 raise ValueError(f"Insumo '{insumo}' não encontrado.")
-            ids_de_insumo[insumo] = linha["id"]
+        gravaveis = {i["id"] for i in itens if i["insumo"] in resumo["totais"]}
 
-        for item_id in gravaveis:
-            conn.execute(
-                "DELETE FROM contagens_itens WHERE item_id = ? AND data = ?",
-                (item_id, data),
-            )
-            if item_id in por_item:
-                conn.execute(
-                    "INSERT INTO contagens_itens (item_id, data, quantidade) VALUES (?, ?, ?)",
-                    (item_id, data, float(por_item[item_id])),
-                )
+        _apagar_varias(conn, "contagens_itens", "item_id", list(gravaveis), data)
+        _inserir_varias(
+            conn, "contagens_itens", ("item_id", "data", "quantidade"),
+            [(item_id, data, float(por_item[item_id]))
+             for item_id in sorted(gravaveis) if item_id in por_item],
+        )
 
+        linhas = []
         for insumo, total in resumo["totais"].items():
             partes = resumo["composicao"][insumo]
             detalhe = "; ".join(partes) if len(partes) > 1 else None
             nota = " · ".join(t for t in (observacao, detalhe) if t) or None
-            conn.execute(
-                "DELETE FROM contagens_fisicas WHERE insumo_id = ? AND data = ?",
-                (ids_de_insumo[insumo], data),
-            )
-            conn.execute(
-                """INSERT INTO contagens_fisicas
-                       (insumo_id, quantidade_contada, data, observacao)
-                   VALUES (?, ?, ?, ?)""",
-                (ids_de_insumo[insumo], total, data, nota),
-            )
+            linhas.append((ids_de_insumo[insumo], total, data, nota))
+        _apagar_varias(conn, "contagens_fisicas", "insumo_id",
+                       [linha[0] for linha in linhas], data)
+        _inserir_varias(
+            conn, "contagens_fisicas",
+            ("insumo_id", "quantidade_contada", "data", "observacao"), linhas,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -851,6 +926,33 @@ def registrar_contagem_pela_planilha(por_item: dict, por_insumo: dict, data: str
         raise
     conn.close()
     return resumo
+
+
+def apagar_contagem_do_dia(data: str) -> dict:
+    """Apaga toda a contagem física de uma data, linhas e totais.
+
+    Os insumos contados nela voltam a usar a contagem anterior como base,
+    ou ficam sem contagem se aquela era a única. Pedido do usuário em
+    30/09/2026, para desfazer a contagem de 29/09. Compras, vendas e
+    produções do dia não são tocadas.
+    """
+    conn = get_connection()
+    try:
+        linhas = conn.execute(
+            "DELETE FROM contagens_itens WHERE data = ?", (data,)
+        ).rowcount
+        insumos = conn.execute(
+            "DELETE FROM contagens_fisicas WHERE data = ?", (data,)
+        ).rowcount
+        if not linhas and not insumos:
+            raise ValueError("Não há contagem gravada nesta data.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return {"linhas": linhas, "insumos": insumos}
 
 
 def atualizar_fatores_da_contagem(fatores: dict) -> int:
@@ -861,17 +963,14 @@ def atualizar_fatores_da_contagem(fatores: dict) -> int:
     """
     if not fatores:
         raise ValueError("Nenhum fator preenchido para gravar.")
+    for fator in fatores.values():
+        if fator is not None and fator <= 0:
+            raise ValueError("O fator precisa ser maior que zero.")
     conn = get_connection()
     try:
-        for item_id, fator in fatores.items():
-            if fator is not None and fator <= 0:
-                raise ValueError("O fator precisa ser maior que zero.")
-            cursor = conn.execute(
-                "UPDATE itens_contagem SET fator_conversao = ? WHERE id = ?",
-                (fator, item_id),
-            )
-            if cursor.rowcount == 0:
-                raise ValueError(f"Item de contagem {item_id} não encontrado.")
+        existentes = _atualizar_varias(conn, "itens_contagem", "fator_conversao", "id", fatores)
+        for item_id in sorted(set(fatores) - existentes):
+            raise ValueError(f"Item de contagem {item_id} não encontrado.")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -899,34 +998,28 @@ def lancar_vendas_em_lote(itens: list[dict], data: str) -> dict:
 
     conn = get_connection()
     try:
-        resolvidos = []
+        ids_de_prato = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM pratos").fetchall()
+        }
+        resolvidos = {}
         for item in itens:
             quantidade = int(item["quantidade"])
             if quantidade < 0:
                 raise ValueError(
                     f"A venda de '{item['prato']}' não pode ser negativa."
                 )
-            prato = conn.execute(
-                "SELECT id FROM pratos WHERE nome = ?", (item["prato"],)
-            ).fetchone()
-            if not prato:
+            if item["prato"] not in ids_de_prato:
                 raise ValueError(f"Prato '{item['prato']}' não encontrado.")
-            resolvidos.append((prato["id"], quantidade))
+            # Prato repetido na lista: vale o último, como valia no laço antigo.
+            resolvidos[ids_de_prato[item["prato"]]] = quantidade
 
-        gravados = apagados = 0
-        for prato_id, quantidade in resolvidos:
-            conn.execute(
-                "DELETE FROM vendas_diarias WHERE prato_id = ? AND data = ?",
-                (prato_id, data),
-            )
-            if quantidade > 0:
-                conn.execute(
-                    "INSERT INTO vendas_diarias (prato_id, quantidade, data) VALUES (?, ?, ?)",
-                    (prato_id, quantidade, data),
-                )
-                gravados += 1
-            else:
-                apagados += 1
+        _apagar_varias(conn, "vendas_diarias", "prato_id", list(resolvidos), data)
+        vendidos = [(prato_id, quantidade, data)
+                    for prato_id, quantidade in resolvidos.items() if quantidade > 0]
+        _inserir_varias(conn, "vendas_diarias", ("prato_id", "quantidade", "data"), vendidos)
+        gravados = len(vendidos)
+        apagados = len(resolvidos) - gravados
         conn.commit()
     except Exception:
         conn.rollback()
@@ -947,20 +1040,20 @@ def atualizar_estoques_minimos(itens: list[dict]) -> int:
     if not itens:
         raise ValueError("Nenhum mínimo preenchido para gravar.")
 
+    minimos = {}
+    for item in itens:
+        minimo = float(item["estoque_minimo"])
+        if minimo < 0:
+            raise ValueError(
+                f"O mínimo de '{item['insumo']}' não pode ser negativo."
+            )
+        minimos[item["insumo"]] = minimo
+
     conn = get_connection()
     try:
-        for item in itens:
-            minimo = float(item["estoque_minimo"])
-            if minimo < 0:
-                raise ValueError(
-                    f"O mínimo de '{item['insumo']}' não pode ser negativo."
-                )
-            cursor = conn.execute(
-                "UPDATE insumos SET estoque_minimo = ? WHERE nome = ?",
-                (minimo, item["insumo"]),
-            )
-            if cursor.rowcount == 0:
-                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+        existentes = _atualizar_varias(conn, "insumos", "estoque_minimo", "nome", minimos)
+        for nome in sorted(set(minimos) - existentes):
+            raise ValueError(f"Insumo '{nome}' não encontrado.")
         conn.commit()
     except Exception:
         conn.rollback()

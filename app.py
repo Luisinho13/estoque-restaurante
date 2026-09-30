@@ -2796,6 +2796,10 @@ def pagina_contagem():
         "contagem vira a nova base do cálculo automático."
     )
 
+    apagada = st.session_state.pop("contagem_apagada", None)
+    if apagada:
+        st.success(apagada, icon=":material/delete:")
+
     insumos = listar_insumos()
     if not insumos:
         st.info("Cadastre um insumo antes de registrar contagem.")
@@ -2835,7 +2839,55 @@ def pagina_contagem():
             "preenchidos abaixo; gravar de novo corrige, não duplica.",
             icon=":material/history:",
         )
+        _apagar_contagem(data_iso, chave)
 
+    _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teoricos, chave)
+
+
+def _esquecer_contagem(chave):
+    """Tira da sessão tudo o que a tela guardou da contagem de um dia."""
+    for nome in list(st.session_state):
+        if nome.startswith(f"{chave}_"):
+            del st.session_state[nome]
+
+
+def _apagar_contagem(data_iso, chave):
+    """Apaga a contagem gravada no dia, com confirmação."""
+    with st.expander(f"Apagar a contagem de {_data_br(data_iso)}"):
+        st.caption(
+            "Apaga todas as linhas e todos os totais gravados nesta data. Os "
+            "insumos contados nela voltam a usar a contagem anterior como base "
+            "(ou ficam sem contagem, se esta era a única). Compras, vendas e "
+            "produções do dia continuam como estão. Não tem como desfazer."
+        )
+        certeza = st.checkbox(
+            f"Sim, apagar a contagem de {_data_br(data_iso)}",
+            key=f"contagem_apagar_{data_iso}",
+        )
+        if st.button("🗑️ Apagar contagem", disabled=not certeza,
+                     key=f"contagem_apagar_botao_{data_iso}"):
+            try:
+                apagado = crud.apagar_contagem_do_dia(data_iso)
+            except Exception as e:
+                st.error(f"Nada foi apagado: {e}")
+                return
+            _esquecer_contagem(chave)
+            st.session_state.pop(f"contagem_apagar_{data_iso}", None)
+            st.session_state["contagem_apagada"] = (
+                f"Contagem de {_data_br(data_iso)} apagada: {apagado['linhas']} "
+                f"linha(s) da planilha e {apagado['insumos']} insumo(s)."
+            )
+            st.rerun()
+
+
+# Cada célula editada no `data_editor` refaz a execução. Sem o fragmento,
+# era a página inteira de novo: login, barra lateral, estoque de todos os
+# insumos e a planilha da contagem relidos do banco a cada número digitado,
+# numa tabela de quase seiscentas linhas. No fragmento, editar refaz só a
+# tabela, com os dados da última execução completa — nenhuma ida ao banco
+# até o botão de gravar. Trocar a data ou a observação refaz tudo.
+@st.fragment
+def _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teoricos, chave):
     st.write("**Preencha o que foi contado, na unidade da linha. Deixe em branco o que não contou.**")
     secoes = list(dict.fromkeys(l["Seção"] for l in linhas))
     secao = TODAS_AS_SECOES
