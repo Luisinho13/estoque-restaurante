@@ -3835,6 +3835,34 @@ def _marcar_repetidas(compras):
     return sum(1 for c in compras if c["repetida"])
 
 
+def _nota_repetida(nota):
+    """Aviso e botão para a nota que entrou mais de uma vez."""
+    chave = f"nota_repetida_{nota['apagar'][0]}"
+    with st.container(border=True):
+        st.warning(
+            f"A nota **{nota['nota']}** de {nota['fornecedor'] or 'fornecedor sem nome'}, "
+            f"em {_data_br(nota['data'])}, foi lançada **{nota['vezes']} vezes** "
+            f"({nota['itens']} itens cada). As {len(nota['apagar'])} linhas a mais "
+            "somam a nota de novo no estoque.",
+            icon=":material/content_copy:",
+        )
+        certeza = st.checkbox(
+            f"Manter uma cópia e apagar as outras {nota['vezes'] - 1}", key=chave
+        )
+        if st.button(f"🗑️ Apagar {len(nota['apagar'])} linha(s) repetida(s)",
+                     disabled=not certeza, key=f"{chave}_botao") and certeza:
+            try:
+                apagados = crud.apagar_compras(nota["apagar"])
+            except Exception as e:
+                st.error(f"Nada foi apagado: {e}")
+                return
+            st.session_state.pop(chave, None)
+            st.session_state["corrigir_recado"] = (
+                f"{apagados} linha(s) repetida(s) da nota {nota['nota']} apagada(s)."
+            )
+            st.rerun()
+
+
 def pagina_corrigir():
     st.title("🧹 Corrigir Lançamentos")
     st.caption(
@@ -3858,6 +3886,8 @@ def pagina_corrigir():
     aba_compras, aba_producoes, aba_baixas = st.tabs(["Compras", "Produções", "Baixas"])
     with aba_compras:
         compras = crud.compras_no_periodo(str(inicio), str(fim))
+        for nota in crud.notas_repetidas(compras):
+            _nota_repetida(nota)
         repetidas = _marcar_repetidas(compras)
         if repetidas:
             st.warning(

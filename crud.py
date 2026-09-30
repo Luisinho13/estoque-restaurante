@@ -1330,6 +1330,48 @@ def compras_no_periodo(inicio: str, fim: str) -> list[dict]:
     return [dict(linha) for linha in linhas]
 
 
+def notas_repetidas(compras: list[dict]) -> list[dict]:
+    """Notas lançadas mais de uma vez, na lista de `compras_no_periodo`.
+
+    Uma nota é o grupo de compras com o mesmo dia, fornecedor, número e
+    observação (a importação antiga de NF-e não guardava o número, só a
+    observação "Importado da NF-e nº ..."). Se a nota entrou k vezes, cada
+    item dela aparece um múltiplo de k vezes — e o k é o maior divisor
+    comum dessas contagens. Não dá para usar "item repetido" direto: a
+    nota pode ter a mesma linha quatro vezes de verdade, e aí só as cópias
+    a mais saem. Caso real: a NF-e 4265757 importada três vezes em
+    29/09/2026, pelo botão que continuava na tela depois de lançar.
+
+    Devolve [{data, fornecedor, nota, vezes, itens, apagar: [ids]}]; mantém
+    os ids mais antigos de cada item.
+    """
+    from math import gcd
+
+    grupos = {}
+    for c in compras:
+        chave = (c["data"], c["fornecedor"], c["numero_nota"], c["observacao"])
+        grupos.setdefault(chave, []).append(c)
+
+    repetidas = []
+    for (data, fornecedor, numero, observacao), linhas in grupos.items():
+        if not (numero or observacao) or len(linhas) < 2:
+            continue   # compra solta, sem nota: fica com a marca de "em dobro?"
+        por_item = {}
+        for c in sorted(linhas, key=lambda c: c["id"]):
+            por_item.setdefault((c["insumo"], c["quantidade"]), []).append(c["id"])
+        vezes = 0
+        for ids in por_item.values():
+            vezes = gcd(vezes, len(ids))
+        if vezes < 2:
+            continue
+        apagar = [i for ids in por_item.values() for i in ids[len(ids) // vezes:]]
+        repetidas.append({
+            "data": data, "fornecedor": fornecedor, "nota": numero or observacao,
+            "vezes": vezes, "itens": len(linhas) // vezes, "apagar": sorted(apagar),
+        })
+    return repetidas
+
+
 def _apagar_lancamentos(tabela: str, ids: list[int]) -> int:
     if not ids:
         raise ValueError("Nenhum lançamento escolhido.")
