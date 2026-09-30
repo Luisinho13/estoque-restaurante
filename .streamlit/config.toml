@@ -1,0 +1,25 @@
+# Tema do app. O verde é o mesmo dos gráficos (COR em app.py): antes o
+# botão principal era o vermelho padrão do Streamlit, e "Gravar" e
+# "Apagar" tinham a mesma cara.
+[theme]
+base = "light"
+primaryColor = "#2E7D6F"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F6F5"
+textColor = "#1E2B28"
+linkColor = "#2E7D6F"
+borderColor = "#DCE5E2"
+dataframeBorderColor = "#E6ECEA"
+dataframeHeaderBackgroundColor = "#EEF4F2"
+showWidgetBorder = true
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+headingFontSizes = ["2rem", "1.5rem", "1.2rem", "1rem", "0.9rem", "0.8rem"]
+baseRadius = "0.6rem"
+buttonRadius = "0.6rem"
+greenColor = "#2E7D6F"
+chartCategoricalColors = ["#2E7D6F", "#E09F3E", "#3A6EA5", "#C1443F", "#7B6BA8", "#6C8A3E"]
+
+[theme.sidebar]
+backgroundColor = "#F2F6F5"
+secondaryBackgroundColor = "#FFFFFF"

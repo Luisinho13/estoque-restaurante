@@ -831,6 +831,8 @@ estoque-restaurante/
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
+├── assets/           # logo do app
+├── .streamlit/config.toml  # tema (cores, fonte, cantos)
 ├── exemplos.py       # gera a nota fiscal e o relatório de PDV fictícios
 ├── seed_demo.py      # gera um banco de demonstração
 ├── backup_nuvem.py   # copia todas as tabelas do banco para um JSON local
@@ -842,6 +844,21 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.13.1 — Cara nova
+
+- **Tema com a cor do projeto.** O botão principal era o vermelho padrão
+  do Streamlit, e "Gravar" e "Apagar" tinham a mesma cara. Agora o
+  principal é o verde dos gráficos, e apagar ou excluir é botão
+  secundário com ícone. Fonte Inter, cantos arredondados, cabeçalho de
+  tabela e paleta de gráficos no mesmo tom (`.streamlit/config.toml`)
+- **Logo** na barra lateral e no login (`assets/`)
+- **Títulos padronizados**: cada tela abre com o mesmo ícone que a leva
+  no menu, em vez de um emoji diferente
+- **Menu pela ordem de uso**: Visão geral, Lançamentos do dia, Contagem e
+  Cadastros, todos visíveis — antes o Streamlit escondia metade atrás de
+  "View more"
+- **Login em cartão**, com uma linha sobre o que o sistema faz
 
 ### v0.13 — Correções, baixas e cozinha fria
 

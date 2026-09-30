@@ -32,6 +32,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+PASTA_DO_APP = Path(__file__).parent
+LOGO = PASTA_DO_APP / "assets" / "logo.svg"
+st.logo(str(LOGO), icon_image=str(PASTA_DO_APP / "assets" / "logo-icone.svg"), size="large")
+
+
+def _titulo(icone: str, texto: str):
+    """Título de tela: o mesmo ícone do menu, na cor do tema, e o nome.
+
+    Antes cada tela abria com um emoji diferente do ícone que a leva no
+    menu. Um só jeito de abrir as telas ajuda quem procura onde está.
+    """
+    st.title(f":primary[:material/{icone}:] {texto}")
+
 # Depois de um push, o Streamlit Cloud troca os arquivos, mas o processo que
 # já estava no ar pode seguir com a versão antiga dos módulos na memória: o
 # app.py é relido a cada execução, os módulos importados não. Em 24/09 isso
@@ -57,7 +70,7 @@ def _modulos_desatualizados():
 
 _velhos = _modulos_desatualizados()
 if _velhos:
-    st.title("📦 Controle de Estoque")
+    _titulo("inventory", "Controle de Estoque")
     st.error(
         "**O sistema foi atualizado e precisa ser reiniciado** antes de usar. "
         "Até lá nada é gravado, para não misturar a versão nova com a antiga. "
@@ -79,7 +92,7 @@ try:
         database.comecar_execucao()
         database.garantir_tabelas()  # uma vez por processo, não a cada clique
 except database.BancoIndisponivel:
-    st.title("📦 Controle de Estoque")
+    _titulo("inventory", "Controle de Estoque")
     st.error(
         "**O banco de dados não respondeu.** Ele hiberna quando fica um "
         "tempo sem uso e leva alguns segundos para acordar. Normalmente "
@@ -113,16 +126,15 @@ def _data_br(data_iso: str) -> str:
 # ---------- Login e cadastro ----------
 
 def _cabecalho_login():
-    st.markdown(
-        f"<h1 style='text-align:center; color:{COR}; margin-bottom:0'>📦 Estoque</h1>"
-        "<p style='text-align:center; color:#6b7280; margin-top:4px'>"
-        "Sistema de estoque do restaurante</p>",
-        unsafe_allow_html=True,
+    st.image(str(LOGO), width=220)
+    st.caption(
+        "Estoque calculado a partir das compras, das vendas e da produção. "
+        "Entre com o usuário que o administrador liberou."
     )
 
 
 def _aba_entrar():
-    with st.form("login"):
+    with st.form("login", border=False):
         usuario = st.text_input("Usuário")
         senha = st.text_input("Senha", type="password")
         entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
@@ -150,7 +162,7 @@ def _aba_cadastrar():
         "O cadastro é enviado para aprovação do administrador. "
         "Você só consegue entrar depois que ele liberar o acesso."
     )
-    with st.form("cadastro"):
+    with st.form("cadastro", border=False):
         nome = st.text_input("Seu nome")
         usuario = st.text_input("Usuário desejado")
         senha = st.text_input("Senha", type="password")
@@ -180,15 +192,19 @@ def _aba_cadastrar():
 
 def tela_login():
     """Login e cadastro. Nada do sistema é montado antes disso passar."""
-    st.markdown("<div style='height: 6vh'></div>", unsafe_allow_html=True)
-    _, meio, _ = st.columns([1, 1.2, 1])
-    with meio:
+    st.space("large")
+    _, meio, _ = st.columns([1, 1.1, 1])
+    with meio, st.container(border=True):
         _cabecalho_login()
         aba_entrar, aba_cadastrar = st.tabs(["Entrar", "Criar cadastro"])
         with aba_entrar:
             _aba_entrar()
         with aba_cadastrar:
             _aba_cadastrar()
+    st.caption(
+        "<div style='text-align:center'>Criado por Luis Felipe · © 2026</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------- Modo demonstração ----------
@@ -251,7 +267,7 @@ MINHAS_AREAS = auth.permissoes_de(USUARIO["usuario"])
 # ---------- Minha conta ----------
 
 def pagina_minha_conta():
-    st.title("Minha conta")
+    _titulo("person", "Minha conta")
 
     st.subheader("Seus dados")
     col1, col2, col3 = st.columns(3)
@@ -304,7 +320,7 @@ def pagina_minha_conta():
 # ---------- Admin: aprovação de cadastros ----------
 
 def pagina_aprovacoes():
-    st.title("Aprovação de cadastros")
+    _titulo("how_to_reg", "Aprovação de cadastros")
     st.caption("Ninguém entra no sistema sem passar por aqui.")
 
     pendentes = auth.listar_usuarios(status="pendente")
@@ -441,7 +457,7 @@ def _cartao_de_usuario(dado):
 
 
 def pagina_usuarios():
-    st.title("Usuários e acessos")
+    _titulo("manage_accounts", "Usuários e acessos")
     st.caption("Quem usa o sistema e o que cada um pode abrir.")
 
     aprovados = auth.listar_usuarios(status="aprovado")
@@ -763,7 +779,7 @@ def _tabela_cobertura(dias: int):
 
 
 def pagina_dashboard():
-    st.title("📦 Controle de Estoque")
+    _titulo("inventory", "Controle de Estoque")
     st.caption(
         "Estoque teórico calculado automaticamente a partir de compras e vendas — "
         "a contagem física só é necessária 1x por mês."
@@ -886,7 +902,7 @@ def pagina_dashboard():
 # ---------- Painel de Estoque ----------
 
 def pagina_painel():
-    st.title("📊 Painel de Estoque")
+    _titulo("inventory_2", "Painel de Estoque")
     st.caption(
         "Estoque teórico atual de cada insumo, calculado a partir de compras, "
         "produções e vendas."
@@ -960,7 +976,8 @@ def pagina_painel():
         )
         col1, col2 = st.columns(2)
         with col1:
-            if st.button(f"Sim, excluir '{pendente}' definitivamente", type="primary"):
+            if st.button(f"Sim, excluir '{pendente}' definitivamente",
+                         icon=":material/delete_forever:"):
                 crud.excluir_insumo(pendente)
                 st.success(f"Insumo '{pendente}' excluído.")
                 del st.session_state["painel_excluir_pendente"]
@@ -1054,7 +1071,7 @@ def _aviso_de_buracos(buracos, dias):
 
 
 def pagina_saida():
-    st.title("📉 Saída de Estoque no Período")
+    _titulo("trending_down", "Saída de Estoque no Período")
     st.caption(
         "As vendas são lançadas dia a dia. Aqui elas são somadas para "
         "responder a pergunta da segunda-feira: quanto saiu do estoque."
@@ -1252,7 +1269,7 @@ def _estoques_minimos(insumos):
 
 
 def pagina_insumos():
-    st.title("🥬 Insumos")
+    _titulo("nutrition", "Insumos")
     st.subheader("Cadastrar novo insumo")
     with st.form("form_insumo"):
         nome = st.text_input("Nome do insumo")
@@ -1303,7 +1320,7 @@ def pagina_insumos():
 
     insumo_excluir = st.selectbox("Selecione o insumo para excluir", insumos_existentes)
     confirmar = st.checkbox(f"Confirmo que quero excluir '{insumo_excluir}' permanentemente")
-    if st.button("Excluir insumo", type="primary", disabled=not confirmar):
+    if st.button("Excluir insumo", icon=":material/delete:", disabled=not confirmar):
         try:
             crud.excluir_insumo(insumo_excluir)
             st.success(f"Insumo '{insumo_excluir}' excluído.")
@@ -1390,7 +1407,7 @@ def _crus_e_producoes():
 # ---------- Cadastrar Prato ----------
 
 def pagina_pratos():
-    st.title("🍽️ Pratos")
+    _titulo("restaurant", "Pratos")
     st.subheader("Cadastrar novo prato")
     with st.form("form_prato"):
         nome = st.text_input("Nome do prato")
@@ -1422,7 +1439,7 @@ def pagina_pratos():
 
     prato_excluir = st.selectbox("Selecione o prato para excluir", pratos_existentes)
     confirmar_prato = st.checkbox(f"Confirmo que quero excluir '{prato_excluir}' permanentemente")
-    if st.button("Excluir prato", type="primary", disabled=not confirmar_prato):
+    if st.button("Excluir prato", icon=":material/delete:", disabled=not confirmar_prato):
         try:
             crud.excluir_prato(prato_excluir)
             st.success(f"Prato '{prato_excluir}' excluído.")
@@ -1520,7 +1537,7 @@ def _recado_gravado(chave):
 
 
 def pagina_ficha_tecnica():
-    st.title("📋 Ficha Técnica")
+    _titulo("receipt_long", "Ficha Técnica")
     st.caption(
         "A ficha do **prato** diz o que 1 porção vendida tira do estoque. A "
         "ficha da **produção** diz o que 1 receita de molho, base ou porcionado "
@@ -1648,7 +1665,7 @@ def _plano_da_ficha():
 
 
 def pagina_ficha_import():
-    st.title("📥 Importar Ficha Técnica")
+    _titulo("upload", "Importar Ficha Técnica")
     st.caption(
         "Envie as planilhas de ficha técnica e o sistema cadastra insumo, prato, "
         "produção e receita de uma vez. Nada é gravado antes de você conferir a prévia."
@@ -1979,7 +1996,7 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
 # ---------- Lançar Compra ----------
 
 def pagina_compra():
-    st.title("🛒 Lançar Compra")
+    _titulo("shopping_cart", "Lançar Compra")
     st.caption("Registrar entrada de estoque.")
 
     insumos = listar_insumos()
@@ -2026,7 +2043,7 @@ def _arquivo_de_exemplo(rotulo: str, dados: bytes, nome: str, tipo: str):
 
 
 def pagina_nfe():
-    st.title("🧾 Importar Nota Fiscal")
+    _titulo("upload_file", "Importar Nota Fiscal")
     st.caption(
         "Envie o arquivo XML da nota fiscal. Produtos já mapeados são "
         "lançados automaticamente; produtos novos você mapeia uma vez aqui, "
@@ -2185,7 +2202,7 @@ def _itens_digitados(tabela) -> list[dict]:
 
 
 def pagina_nf_manual():
-    st.title("🧾 Lançar Nota Fiscal (manual)")
+    _titulo("edit_note", "Lançar Nota Fiscal (manual)")
     st.caption(
         "Para a nota que chega sem XML: em papel, em PDF, ou do fornecedor "
         "que não manda o arquivo. Os itens são digitados aqui e entram no "
@@ -2505,7 +2522,7 @@ def _dia_fechado(data_iso):
 
 
 def pagina_venda():
-    st.title("💰 Lançar Venda do Dia")
+    _titulo("point_of_sale", "Lançar Venda do Dia")
     st.caption(
         "Digite quantos de cada prato foram vendidos, olhando o resumo do PDV. "
         "O número lançado aqui é o que desconta do estoque."
@@ -2623,7 +2640,7 @@ def _mapeamentos_salvos(pratos):
 
 
 def pagina_zig():
-    st.title("🧾 Importar Vendas do PDV")
+    _titulo("receipt", "Importar Vendas do PDV")
     st.caption(
         "Envie a planilha de vendas exportada da Zig. Cada produto é ligado uma "
         "vez a um prato do sistema e, nas próximas importações, já é reconhecido "
@@ -2942,7 +2959,7 @@ def _importar_planilha_de_contagem():
 
 
 def pagina_itens_contagem():
-    st.title("📋 Itens da Contagem")
+    _titulo("checklist", "Itens da Contagem")
     st.caption(
         "As linhas da planilha de estoque que a tela de Contagem Física "
         "mostra, e a conversão de cada uma para o insumo."
@@ -3046,7 +3063,7 @@ def _avisos_da_contagem(resumo):
 
 
 def pagina_contagem():
-    st.title("✅ Contagem Física")
+    _titulo("fact_check", "Contagem Física")
     st.caption(
         "A contagem na ordem da planilha de estoque, na unidade de cada "
         "prateleira. O sistema converte cada linha para o insumo e a "
@@ -3404,7 +3421,7 @@ def _grafico_perdas(itens):
 
 
 def pagina_perdas():
-    st.title("🧾 Perdas e Reconciliação")
+    _titulo("scale", "Perdas e Reconciliação")
     st.caption(
         "O que foi comprado, o que virou venda e o que se perdeu pelo caminho — "
         "entre uma contagem física e a seguinte."
@@ -3517,7 +3534,7 @@ def pagina_perdas():
 # sai — e confere quanto rendeu, que vem preenchido pelo rendimento da ficha.
 
 def pagina_producao():
-    st.title("🍳 Lançar Produção")
+    _titulo("soup_kitchen", "Lançar Produção")
     st.caption(
         "Molho, base, carne porcionada: o que a cozinha produziu entra no "
         "estoque, e os ingredientes da receita saem."
@@ -3698,7 +3715,7 @@ def _historico_de_producao():
 # ---------- Baixa de Estoque ----------
 
 def pagina_baixa():
-    st.title("🗑️ Baixa de Estoque")
+    _titulo("remove_shopping_cart", "Baixa de Estoque")
     st.caption(
         "Para o que sai do estoque sem ser venda nem produção: a garrafa que "
         "quebrou, o peixe que venceu, a refeição da equipe. Sem a baixa, isso "
@@ -3809,7 +3826,7 @@ def _escolher_para_apagar(linhas, colunas, chave, apagar, rotulo):
         f"Sim, apagar {len(ids)} lançamento(s). Não tem como desfazer.",
         key=f"{chave}_certeza_{versao}",
     )
-    if st.button("🗑️ Apagar", type="primary", disabled=not certeza,
+    if st.button("Apagar", icon=":material/delete:", disabled=not certeza,
                  key=f"{chave}_apagar_{versao}") and certeza:
         try:
             apagados = apagar(ids)
@@ -3864,7 +3881,7 @@ def _nota_repetida(nota):
 
 
 def pagina_corrigir():
-    st.title("🧹 Corrigir Lançamentos")
+    _titulo("delete_sweep", "Corrigir Lançamentos")
     st.caption(
         "Para apagar o que foi lançado em dobro ou errado. Apagar uma compra "
         "tira do estoque o que ela tinha somado; apagar uma produção ou uma "
@@ -4034,16 +4051,19 @@ def _liberadas(*areas):
     return [PAGINAS_POR_AREA[a] for a in areas if a in MINHAS_AREAS]
 
 
+# A ordem segue o uso: o que se consulta, o que se lança todo dia, a
+# contagem da semana e, por último, os cadastros, que mudam pouco.
+SECOES_DO_MENU = {
+    "Visão geral": ("dashboard", "painel", "saida", "perdas"),
+    "Lançamentos do dia": ("venda", "producao", "baixa", "compra", "nf_manual", "nfe",
+                           "zig", "corrigir"),
+    "Contagem": ("contagem", "itens_contagem"),
+    "Cadastros": ("insumos", "pratos", "ficha", "ficha_import"),
+}
 menu = {}
-if _liberadas("dashboard", "painel", "saida", "perdas"):
-    menu["Visão geral"] = _liberadas("dashboard", "painel", "saida", "perdas")
-CADASTROS = ("insumos", "pratos", "ficha", "ficha_import", "itens_contagem")
-if _liberadas(*CADASTROS):
-    menu["Cadastros"] = _liberadas(*CADASTROS)
-LANCAMENTOS = ("compra", "nf_manual", "nfe", "zig", "venda", "producao", "baixa",
-               "contagem", "corrigir")
-if _liberadas(*LANCAMENTOS):
-    menu["Lançamentos"] = _liberadas(*LANCAMENTOS)
+for secao, areas in SECOES_DO_MENU.items():
+    if _liberadas(*areas):
+        menu[secao] = _liberadas(*areas)
 
 menu["Conta"] = [PG_MINHA_CONTA]
 if E_ADMIN:
@@ -4051,10 +4071,12 @@ if E_ADMIN:
 
 # Um usuário aprovado mas ainda sem nenhuma área cai aqui: sem página
 # nenhuma o st.navigation quebraria, então ele fica só com a conta dele.
-if not any(chave in menu for chave in ("Visão geral", "Cadastros", "Lançamentos")):
+if not any(chave in menu for chave in SECOES_DO_MENU):
     st.session_state["_sem_areas"] = True
 
-navegacao = st.navigation(menu)
+# expanded: sem ele o Streamlit esconde o que passa de dez itens atrás
+# de "View more", e a tela de contagem e os cadastros sumiam do menu.
+navegacao = st.navigation(menu, expanded=True)
 
 if MODO_DEMO:
     st.warning(

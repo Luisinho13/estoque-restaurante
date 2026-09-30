@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="48" viewBox="0 0 220 48">
+  <rect x="2" y="4" width="40" height="40" rx="10" fill="#2E7D6F"/>
+  <path d="M12 18 L22 13 L32 18 L32 30 L22 35 L12 30 Z" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M12 18 L22 23 L32 18 M22 23 L22 35" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linejoin="round"/>
+  <text x="52" y="22" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#1E2B28">Controle de</text>
+  <text x="52" y="40" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#2E7D6F">Estoque</text>
+</svg>
