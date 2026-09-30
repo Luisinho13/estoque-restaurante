@@ -14,6 +14,7 @@ import streamlit as st
 
 import database
 import auth
+import bar_import
 import contagem_import
 import crud
 import exemplos
@@ -37,8 +38,8 @@ st.set_page_config(
 # antes de gravar. Com crud antigo e tela nova, um lançamento gravaria pela
 # regra velha sem erro nenhum. Cada módulo guarda a data do arquivo que ele
 # carregou; se o arquivo no disco mudou desde então, o processo está velho.
-MODULOS_DO_APP = (database, auth, contagem_import, crud, exemplos, ficha_import,
-                  nfe_import, zig_import)
+MODULOS_DO_APP = (database, auth, bar_import, contagem_import, crud, exemplos,
+                  ficha_import, nfe_import, zig_import)
 
 
 def _modulos_desatualizados():
@@ -96,6 +97,9 @@ COR_ALERTA = "#C1443F"
 # Acima disso a perda deixa de ser normal e vira alerta. Um restaurante bem
 # tocado perde de 1% a 4%; 5% já pede explicação.
 LIMITE_PERDA_ALTA = 5.0
+
+# Opção dos filtros de setor (venda e saída) que mostra cozinha e bar juntos.
+TODOS_OS_SETORES = "Todos"
 
 
 def _data_br(data_iso: str) -> str:
@@ -1068,7 +1072,20 @@ def pagina_saida():
     inicio_iso, fim_iso = str(inicio), str(fim)
     st.caption(f"De {_data_br(inicio_iso)} até {_data_br(fim_iso)}")
 
-    resumo = crud.resumo_do_periodo(inicio_iso, fim_iso)
+    # A saída do bar é a venda dos drinks mais o que as caldas, o xarope e a
+    # espuma gastaram; a da cozinha, o mesmo com pratos e molhos. "Todos" é
+    # o restaurante inteiro, como sempre foi.
+    setor = None
+    if "bar" in crud.setores_dos_pratos().values():
+        escolha = st.radio(
+            "Setor", [TODOS_OS_SETORES] + list(crud.SETORES.values()),
+            horizontal=True, key="saida_setor",
+            help="Bar: o que os drinks vendidos e os preparos do bar tiraram do "
+                 "estoque. Cozinha: o mesmo com pratos e molhos.",
+        )
+        setor = {rotulo: cod for cod, rotulo in crud.SETORES.items()}.get(escolha)
+
+    resumo = crud.resumo_do_periodo(inicio_iso, fim_iso, setor)
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Pratos vendidos", int(resumo["pratos_vendidos"]), border=True)
@@ -1083,7 +1100,7 @@ def pagina_saida():
 
     _aviso_de_buracos(resumo["dias_sem_lancamento"], resumo["dias"])
 
-    saidas = crud.saida_por_periodo(inicio_iso, fim_iso)
+    saidas = crud.saida_por_periodo(inicio_iso, fim_iso, setor)
     if not saidas:
         st.info(
             "Nenhuma venda lançada neste período — não há saída de estoque "
@@ -1131,14 +1148,14 @@ def pagina_saida():
         st.download_button(
             "Baixar em CSV",
             data=visivel.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"saida-estoque-{inicio_iso}-a-{fim_iso}.csv",
+            file_name=f"saida-estoque-{setor or 'todos'}-{inicio_iso}-a-{fim_iso}.csv",
             mime="text/csv",
             icon=":material/download:",
         )
 
     with aba_pratos:
         st.caption("Quais pratos geraram essa saída.")
-        pratos = crud.pratos_vendidos_no_periodo(inicio_iso, fim_iso)
+        pratos = crud.pratos_vendidos_no_periodo(inicio_iso, fim_iso, setor)
         if pratos:
             st.dataframe(
                 pd.DataFrame(pratos).rename(
@@ -1152,7 +1169,7 @@ def pagina_saida():
 
     with aba_dias:
         st.caption("Quanto cada dia do período pesou.")
-        por_dia = crud.vendas_por_dia_no_periodo(inicio_iso, fim_iso)
+        por_dia = crud.vendas_por_dia_no_periodo(inicio_iso, fim_iso, setor)
         if por_dia:
             _grafico_dia_a_dia(por_dia)
             tabela = pd.DataFrame(por_dia)
@@ -1374,12 +1391,14 @@ def pagina_pratos():
     st.subheader("Cadastrar novo prato")
     with st.form("form_prato"):
         nome = st.text_input("Nome do prato")
+        setor = st.radio("Setor", list(crud.SETORES), format_func=crud.SETORES.get,
+                         horizontal=True, help="Drink é do bar.")
         enviado = st.form_submit_button("Cadastrar")
 
     if enviado:
         if nome:
             try:
-                crud.cadastrar_prato(nome)
+                crud.cadastrar_prato(nome, setor)
                 st.success(f"Prato '{nome}' cadastrado!")
             except Exception as e:
                 st.error(f"Erro: {e}")
@@ -1638,6 +1657,40 @@ def pagina_ficha_import():
         icon=":material/info:",
     )
 
+    aba_cozinha, aba_bar = st.tabs(["🍳 Cozinha", "🍸 Bar"])
+    with aba_cozinha:
+        _importar_ficha_da_cozinha()
+    with aba_bar:
+        _importar_ficha_do_bar()
+
+
+def _importar_ficha_do_bar():
+    """A planilha do bar: drinks viram pratos do setor bar, preparos viram produção."""
+    st.caption(
+        "A planilha de fichas do bar (Preparos bar villa). Cada aba de drink vira "
+        "um prato do bar, lançado na Venda do Dia; caldas, xarope e espuma viram "
+        "produção do bar. A dose da planilha está em litro e o estoque conta "
+        "garrafa e lata: a conversão usa o volume escrito no nome do insumo."
+    )
+    arquivo = st.file_uploader("Ficha do bar (drinks e preparos)", type=["xlsx"],
+                               key="up_ficha_bar")
+    if arquivo is not None:
+        try:
+            st.session_state["ficha_planilha_bar"] = bar_import.ler_planilha(arquivo)
+        except Exception as e:
+            st.error(f"Não consegui ler a planilha do bar: {e}")
+    receitas = st.session_state.get("ficha_planilha_bar")
+    if not receitas:
+        st.info("Envie a planilha do bar para ver a prévia.")
+        return
+    plano = bar_import.montar_plano(receitas)
+    if not plano["fichas"] and not plano["producoes"]:
+        st.error("Não encontrei nenhuma ficha preenchida nessa planilha.")
+        return
+    _previa_e_gravacao(plano, "bar", ("ficha_planilha_bar",))
+
+
+def _importar_ficha_da_cozinha():
     col1, col2 = st.columns(2)
     arquivo_prato = col1.file_uploader(
         "Ficha dos pratos finais", type=["xlsx"], key="up_ficha_prato"
@@ -1671,7 +1724,15 @@ def pagina_ficha_import():
     if plano is None or not plano["fichas"]:
         st.error("Não encontrei nenhuma ficha técnica preenchida nessas planilhas.")
         return
+    _previa_e_gravacao(plano, "cozinha", ("ficha_planilha_prato", "ficha_planilha_producao",
+                                          "ficha_de_para_extra"))
 
+
+def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
+    """A prévia do plano de importação e o botão de gravar, da cozinha ou do bar.
+
+    `prefixo` separa os widgets das duas abas, que estão na mesma página.
+    """
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Pratos", len(plano["pratos"]),
                 delta=f"{len(plano['pratos_novos'])} novos", border=True)
@@ -1703,7 +1764,8 @@ def pagina_ficha_import():
             st.rerun()
 
     if plano["avisos"]:
-        with st.expander(f"⚠️ {len(plano['avisos'])} ponto(s) de atenção na leitura"):
+        with st.expander(f"⚠️ {len(plano['avisos'])} ponto(s) de atenção na leitura",
+                         expanded=prefixo == "bar"):
             st.caption(
                 "São as linhas em que a planilha estava ambígua e eu tive que "
                 "decidir. Vale conferir antes de gravar."
@@ -1782,7 +1844,8 @@ def pagina_ficha_import():
             hide_index=True, width="stretch",
         )
         corrigir_unidades = st.checkbox(
-            "Passar esses insumos para a unidade da planilha", value=True
+            "Passar esses insumos para a unidade da planilha", value=True,
+            key=f"{prefixo}_corrigir_unidades",
         )
 
     substituir = st.checkbox(
@@ -1792,11 +1855,14 @@ def pagina_ficha_import():
             "Recomendado. Sem isso, um insumo que saiu da receita continuaria "
             "sendo descontado para sempre."
         ),
+        key=f"{prefixo}_substituir",
     )
     confirmado = st.checkbox(
-        f"Confirmo a importação de {len(plano['fichas'])} linha(s) de ficha técnica"
+        f"Confirmo a importação de {len(plano['fichas'])} linha(s) de ficha técnica",
+        key=f"{prefixo}_confirmado",
     )
-    if st.button("📥 Cadastrar tudo", type="primary", disabled=not confirmado):
+    if st.button("📥 Cadastrar tudo", type="primary", disabled=not confirmado,
+                 key=f"{prefixo}_cadastrar"):
         try:
             feito = ficha_import.aplicar_plano(plano, substituir, corrigir_unidades)
         except Exception as e:
@@ -1810,8 +1876,7 @@ def pagina_ficha_import():
         if feito["unidades"]:
             recado += f" {feito['unidades']} unidade(s) de medida corrigida(s)."
         st.success(recado)
-        for chave_sessao in ("ficha_planilha_prato", "ficha_planilha_producao",
-                             "ficha_de_para_extra"):
+        for chave_sessao in chaves_para_limpar:
             st.session_state.pop(chave_sessao, None)
 
 
@@ -2125,15 +2190,20 @@ def _ficha_do_prato(prato: str, quantidade: float):
     st.caption(f"Sai do estoque: {linhas}{resto}")
 
 
-def _venda_em_lote(pratos, data_iso):
+# No fragmento, digitar na tabela refaz só a tabela, com os dados da última
+# execução completa, sem ir ao banco (mesmo motivo da tabela da contagem).
+@st.fragment
+def _venda_em_lote(pratos, setores, com_ficha, lancado, data_iso):
     """A tela do dia a dia: todos os pratos numa tabela, um envio só.
 
     Lançar prato a prato, num formulário por vez, são dezenas de envios
     por dia — a operação não sobrevive a isso, e o dia acaba não sendo
     lançado. A tabela vem preenchida com o que já está gravado naquela
     data, então reabrir a tela mostra o estado atual e permite corrigir.
+
+    Com drinks cadastrados, a tabela mostra um setor por vez (cozinha ou
+    bar), e o que foi digitado nos dois é gravado junto.
     """
-    lancado = {v["prato"]: v["quantidade"] for v in crud.vendas_do_dia(data_iso)}
     if lancado:
         st.info(
             f"{len(lancado)} prato(s) já lançado(s) em {_data_br(data_iso)}. "
@@ -2146,10 +2216,25 @@ def _venda_em_lote(pratos, data_iso):
         "**0** apaga o lançamento daquele prato no dia."
     )
     chave = f"venda_lote_{data_iso}"
-    linhas = [{"Prato": nome, "Qtd.": lancado.get(nome)} for nome in pratos]
+    # Carregado aqui, de todos os setores, porque a tabela pode estar
+    # mostrando um setor só.
+    st.session_state.setdefault(
+        f"{chave}_valores", {nome: float(qtd) for nome, qtd in lancado.items()}
+    )
+    setor = TODOS_OS_SETORES
+    if "bar" in setores.values():
+        setor = st.radio(
+            "Setor", [TODOS_OS_SETORES] + list(crud.SETORES.values()),
+            horizontal=True, key="venda_setor",
+            help="O bar pode lançar os drinks e a cozinha os pratos, cada um no seu. "
+                 "O que foi digitado no outro setor continua guardado.",
+        )
+    codigo = {rotulo: cod for cod, rotulo in crud.SETORES.items()}.get(setor)
+    visiveis = [n for n in pratos if codigo is None or setores.get(n, "cozinha") == codigo]
+    linhas = [{"Prato": nome, "Qtd.": lancado.get(nome)} for nome in visiveis]
     valores = _tabela_em_lote(
         linhas, "Prato", "Qtd.", "Qtd.", chave,
-        "%d", "Filtrar prato", passo=1,
+        "%d", "Filtrar prato", passo=1, grupo=setor,
     )
 
     itens = _como_itens(valores, "prato", "quantidade")
@@ -2158,10 +2243,15 @@ def _venda_em_lote(pratos, data_iso):
         return
 
     total = sum(i["quantidade"] for i in itens)
-    st.write(f"**{len(itens)} prato(s) preenchido(s)** · {total:g} unidade(s).")
+    por_setor = {}
+    for item in itens:
+        rotulo = crud.SETORES.get(setores.get(item["prato"], "cozinha"), "Cozinha")
+        por_setor[rotulo] = por_setor.get(rotulo, 0) + 1
+    detalhe = " + ".join(f"{n} {rotulo.lower()}" for rotulo, n in sorted(por_setor.items()))
+    st.write(f"**{len(itens)} prato(s) preenchido(s)** ({detalhe}) · {total:g} unidade(s).")
 
     sem_ficha = [i["prato"] for i in itens
-                 if i["quantidade"] > 0 and not crud.impacto_da_venda(i["prato"], 1)]
+                 if i["quantidade"] > 0 and i["prato"] not in com_ficha]
     if sem_ficha:
         st.warning(
             f"{len(sem_ficha)} prato(s) sem ficha técnica não vão descontar nada "
@@ -2177,6 +2267,9 @@ def _venda_em_lote(pratos, data_iso):
             st.error(f"Nada foi gravado: {e}")
             return
         _guardar_resultado(chave, valores, resultado)
+        # A lista "Lançado em", no fim da página, fica fora do fragmento:
+        # sem refazer a página inteira, ela mostraria o dia antes da gravação.
+        st.rerun()
 
     resultado = _resultado_guardado(chave, valores)
     if resultado:
@@ -2302,7 +2395,9 @@ def pagina_venda():
 
     aba_lote, aba_um = st.tabs(["O dia inteiro (tabela)", "Um prato"])
     with aba_lote:
-        _venda_em_lote(pratos, data_iso)
+        lancado = {v["prato"]: v["quantidade"] for v in crud.vendas_do_dia(data_iso)}
+        _venda_em_lote(pratos, crud.setores_dos_pratos(), crud.pratos_com_ficha(),
+                       lancado, data_iso)
     with aba_um:
         _venda_um_prato(pratos, data_iso)
 
@@ -2981,6 +3076,9 @@ def _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teo
             "gravados": len(resumo["totais"]),
             "divergentes": [d for d in diferencas if abs(d["Diferença"]) > 0.001],
         })
+        # O aviso de contagem já gravada e o botão de apagar ficam fora do
+        # fragmento; refazer a página inteira faz os dois aparecerem.
+        st.rerun()
 
     resultado = _resultado_guardado(chave, valores)
     if resultado:

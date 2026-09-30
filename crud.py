@@ -169,11 +169,42 @@ def tipos_dos_insumos() -> dict[str, str]:
     return {linha["nome"]: linha["tipo"] for linha in linhas}
 
 
-def cadastrar_prato(nome: str):
+# Setor do prato e da produção. O bar entrou em 30/09/2026, com a ficha dos
+# drinks e dos preparos (caldas, xarope, espuma), para a saída do bar ser
+# lançada e vista separada da cozinha.
+SETORES = {"cozinha": "Cozinha", "bar": "Bar"}
+
+
+def cadastrar_prato(nome: str, setor: str = "cozinha"):
+    if setor not in SETORES:
+        raise ValueError(f"Setor desconhecido: {setor}")
     conn = get_connection()
-    conn.execute("INSERT INTO pratos (nome) VALUES (?)", (nome,))
+    conn.execute("INSERT INTO pratos (nome, setor) VALUES (?, ?)", (nome, setor))
     conn.commit()
     conn.close()
+
+
+def setores_dos_pratos() -> dict[str, str]:
+    """{nome do prato: setor}."""
+    conn = get_connection()
+    linhas = conn.execute("SELECT nome, setor FROM pratos").fetchall()
+    conn.close()
+    return {linha["nome"]: linha["setor"] for linha in linhas}
+
+
+def pratos_com_ficha() -> set[str]:
+    """Os pratos que têm ao menos uma linha de ficha técnica, numa consulta só.
+
+    A tela de venda perguntava prato a prato (`impacto_da_venda`), uma ida
+    ao banco por prato preenchido a cada célula editada.
+    """
+    conn = get_connection()
+    linhas = conn.execute(
+        """SELECT DISTINCT p.nome FROM pratos p
+           JOIN ficha_tecnica ft ON ft.prato_id = p.id"""
+    ).fetchall()
+    conn.close()
+    return {linha["nome"] for linha in linhas}
 
 
 def definir_ficha_tecnica(prato_nome: str, insumo_nome: str, quantidade_por_prato: float):
@@ -1224,20 +1255,28 @@ def excluir_producao(producao_id: int):
 # - produção: entra o item produzido;
 # - venda: sai o que a ficha do prato manda (só o primeiro nível);
 # - gasto de produção: sai o que cada leva gastou, como foi gravado.
+#
+# `setor` diz de onde veio o movimento, cozinha ou bar: o do prato vendido,
+# ou o da produção que entrou ou gastou. Compra não tem setor (o açúcar e o
+# limão servem aos dois). É por ele que a tela de saída separa a do bar.
 SQL_MOVIMENTOS = """
-    SELECT insumo_id, data, quantidade AS entrada, 0.0 AS saida
+    SELECT insumo_id, data, quantidade AS entrada, 0.0 AS saida,
+           CAST(NULL AS TEXT) AS setor
     FROM compras
     UNION ALL
-    SELECT insumo_id, data, quantidade_produzida, 0.0
-    FROM producoes
+    SELECT p.insumo_id, p.data, p.quantidade_produzida, 0.0, prod.setor
+    FROM producoes p
+    JOIN insumos prod ON prod.id = p.insumo_id
     UNION ALL
-    SELECT ft.insumo_id, v.data, 0.0, v.quantidade * ft.quantidade_por_prato
+    SELECT ft.insumo_id, v.data, 0.0, v.quantidade * ft.quantidade_por_prato, pr.setor
     FROM vendas_diarias v
     JOIN ficha_tecnica ft ON ft.prato_id = v.prato_id
+    JOIN pratos pr ON pr.id = v.prato_id
     UNION ALL
-    SELECT pc.insumo_id, p.data, 0.0, pc.quantidade
+    SELECT pc.insumo_id, p.data, 0.0, pc.quantidade, prod.setor
     FROM producoes_consumo pc
     JOIN producoes p ON p.id = pc.producao_id
+    JOIN insumos prod ON prod.id = p.insumo_id
 """
 
 def calcular_estoque_teorico(insumo_nome: str) -> dict:
@@ -1808,14 +1847,27 @@ def segunda_da_semana(data: datetime.date = None) -> datetime.date:
     return data - datetime.timedelta(days=data.weekday())
 
 
-def saida_por_periodo(inicio: str, fim: str) -> list[dict]:
+def _filtro_de_setor(coluna: str, setor: str | None) -> tuple[str, tuple]:
+    """Trecho de WHERE e parâmetro para filtrar por setor; vazio sem setor."""
+    if setor is None:
+        return "", ()
+    if setor not in SETORES:
+        raise ValueError(f"Setor desconhecido: {setor}")
+    return f" AND {coluna} = ?", (setor,)
+
+
+def saida_por_periodo(inicio: str, fim: str, setor: str = None) -> list[dict]:
     """Quanto de cada insumo saiu do estoque entre duas datas, com o saldo atual.
 
     A saída é o consumo teórico: vendas lançadas × ficha do prato, mais o
     que as produções do período gastaram. Vem junto o estoque atual de
     cada insumo, porque as duas perguntas são feitas ao mesmo tempo —
     quanto saiu e quanto ainda tem.
+
+    Com `setor`, só a saída causada por aquele setor: a venda dos seus
+    pratos e o gasto das suas produções.
     """
+    filtro, extra = _filtro_de_setor("m.setor", setor)
     conn = get_connection()
     linhas = conn.execute(
         f"""
@@ -1824,11 +1876,11 @@ def saida_por_periodo(inicio: str, fim: str) -> list[dict]:
                SUM(m.saida) AS saida
         FROM ({SQL_MOVIMENTOS}) m
         JOIN insumos i ON i.id = m.insumo_id
-        WHERE m.data >= ? AND m.data <= ? AND m.saida > 0
+        WHERE m.data >= ? AND m.data <= ? AND m.saida > 0{filtro}
         GROUP BY i.id, i.nome, i.unidade_medida
         ORDER BY saida DESC
         """,
-        (inicio, fim),
+        (inicio, fim, *extra),
     ).fetchall()
     conn.close()
 
@@ -1850,36 +1902,39 @@ def saida_por_periodo(inicio: str, fim: str) -> list[dict]:
     return resultado
 
 
-def pratos_vendidos_no_periodo(inicio: str, fim: str) -> list[dict]:
+def pratos_vendidos_no_periodo(inicio: str, fim: str, setor: str = None) -> list[dict]:
     """Quantos de cada prato foram vendidos no período."""
+    filtro, extra = _filtro_de_setor("p.setor", setor)
     conn = get_connection()
     linhas = conn.execute(
-        """
+        f"""
         SELECT p.nome AS prato, SUM(v.quantidade) AS vendidos
         FROM vendas_diarias v
         JOIN pratos p ON p.id = v.prato_id
-        WHERE v.data >= ? AND v.data <= ?
+        WHERE v.data >= ? AND v.data <= ?{filtro}
         GROUP BY p.id, p.nome
         ORDER BY vendidos DESC
         """,
-        (inicio, fim),
+        (inicio, fim, *extra),
     ).fetchall()
     conn.close()
     return [dict(linha) for linha in linhas]
 
 
-def vendas_por_dia_no_periodo(inicio: str, fim: str) -> list[dict]:
+def vendas_por_dia_no_periodo(inicio: str, fim: str, setor: str = None) -> list[dict]:
     """Total de pratos vendidos em cada dia do período, só dos dias lançados."""
+    filtro, extra = _filtro_de_setor("p.setor", setor)
     conn = get_connection()
     linhas = conn.execute(
-        """
-        SELECT data, SUM(quantidade) AS pratos_vendidos
-        FROM vendas_diarias
-        WHERE data >= ? AND data <= ?
-        GROUP BY data
-        ORDER BY data
+        f"""
+        SELECT v.data, SUM(v.quantidade) AS pratos_vendidos
+        FROM vendas_diarias v
+        JOIN pratos p ON p.id = v.prato_id
+        WHERE v.data >= ? AND v.data <= ?{filtro}
+        GROUP BY v.data
+        ORDER BY v.data
         """,
-        (inicio, fim),
+        (inicio, fim, *extra),
     ).fetchall()
     conn.close()
     return [dict(linha) for linha in linhas]
@@ -1985,13 +2040,19 @@ def vendas_pendentes(janela: int = JANELA_DO_LEMBRETE) -> list[str]:
     return dias_sem_lancamento(inicio.isoformat(), ontem.isoformat())
 
 
-def resumo_do_periodo(inicio: str, fim: str) -> dict:
-    """Números do topo da tela de saída acumulada."""
+def resumo_do_periodo(inicio: str, fim: str, setor: str = None) -> dict:
+    """Números do topo da tela de saída acumulada.
+
+    O setor filtra os pratos vendidos e os insumos movimentados. Dias sem
+    lançamento e compras continuam sendo do restaurante inteiro.
+    """
+    filtro, extra = _filtro_de_setor("p.setor", setor)
     conn = get_connection()
     pratos_vendidos = conn.execute(
-        """SELECT COALESCE(SUM(quantidade), 0) AS n FROM vendas_diarias
-           WHERE data >= ? AND data <= ?""",
-        (inicio, fim),
+        f"""SELECT COALESCE(SUM(v.quantidade), 0) AS n FROM vendas_diarias v
+            JOIN pratos p ON p.id = v.prato_id
+            WHERE v.data >= ? AND v.data <= ?{filtro}""",
+        (inicio, fim, *extra),
     ).fetchone()["n"]
     compras_lancadas = conn.execute(
         "SELECT COUNT(*) AS n FROM compras WHERE data >= ? AND data <= ?",
@@ -1999,7 +2060,7 @@ def resumo_do_periodo(inicio: str, fim: str) -> dict:
     ).fetchone()["n"]
     conn.close()
 
-    saidas = saida_por_periodo(inicio, fim)
+    saidas = saida_por_periodo(inicio, fim, setor)
     buracos = dias_sem_lancamento(inicio, fim)
     total_dias = _dias_entre(inicio, fim) + 1
 

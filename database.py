@@ -454,13 +454,15 @@ ESQUEMA = """
             nome TEXT NOT NULL UNIQUE,
             unidade_medida TEXT NOT NULL,      -- ex: kg, g, l, ml, un
             estoque_minimo REAL NOT NULL DEFAULT 0,
-            tipo TEXT NOT NULL DEFAULT 'cru',  -- 'cru' (comprado) ou 'producao' (feito na cozinha)
-            rendimento REAL                    -- produção: quanto 1 receita rende, na unidade do insumo
+            tipo TEXT NOT NULL DEFAULT 'cru',  -- 'cru' (comprado) ou 'producao' (feito na cozinha ou no bar)
+            rendimento REAL,                   -- produção: quanto 1 receita rende, na unidade do insumo
+            setor TEXT NOT NULL DEFAULT 'cozinha'  -- produção: quem faz, 'cozinha' ou 'bar' (cru não usa)
         );
 
         CREATE TABLE IF NOT EXISTS pratos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome TEXT NOT NULL UNIQUE
+            nome TEXT NOT NULL UNIQUE,
+            setor TEXT NOT NULL DEFAULT 'cozinha'  -- 'cozinha' ou 'bar' (drink)
         );
 
         CREATE TABLE IF NOT EXISTS ficha_tecnica (
@@ -599,6 +601,10 @@ COLUNAS_NOVAS = {
     "insumos": {
         "tipo": "TEXT NOT NULL DEFAULT 'cru'",
         "rendimento": "REAL",
+        "setor": "TEXT NOT NULL DEFAULT 'cozinha'",
+    },
+    "pratos": {
+        "setor": "TEXT NOT NULL DEFAULT 'cozinha'",
     },
 }
 

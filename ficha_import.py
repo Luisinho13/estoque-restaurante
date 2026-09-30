@@ -573,6 +573,14 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
         for d in conn.execute("SELECT nome, tipo FROM insumos").fetchall()
     }
     ja_tem_prato = {d["nome"] for d in conn.execute("SELECT nome FROM pratos").fetchall()}
+    # Drink e preparo do bar têm planilha própria (bar_import.py): não são
+    # prato "sem ficha" nem insumo órfão aos olhos da planilha da cozinha.
+    do_bar = {
+        d["nome"] for d in conn.execute(
+            "SELECT nome FROM pratos WHERE setor = 'bar' "
+            "UNION SELECT nome FROM insumos WHERE setor = 'bar'"
+        ).fetchall()
+    }
     # Insumo que a contagem conta tem a unidade que o fator da linha da
     # contagem pressupõe. Trocar a unidade dele aqui estragaria a contagem.
     contados = {
@@ -792,11 +800,11 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
         "pratos": pratos,
         "pratos_novos": sorted(p for p in pratos if p not in ja_tem_prato),
         "fichas": sorted(fichas, key=lambda f: (f["prato"], f["insumo"])),
-        "orfaos": sorted(n for n in unidade_atual if n not in usados_no_plano),
+        "orfaos": sorted(n for n in unidade_atual if n not in usados_no_plano and n not in do_bar),
         "unidades_divergentes": sorted(divergentes, key=lambda d: d["insumo"]),
         # Prato que já recebe venda e que a planilha não cobre: continua sem
         # ficha, então a venda dele não desconta nada do estoque.
-        "pratos_sem_ficha": sorted(p for p in ja_tem_prato if p not in set(pratos)),
+        "pratos_sem_ficha": sorted(p for p in ja_tem_prato if p not in set(pratos) and p not in do_bar),
         "avisos": sorted(set(avisos)),
     }
 
@@ -860,16 +868,21 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
     planilha é trocada inteira — inclusive o que tiver sido editado na tela
     Ficha Técnica. Sem isso, um insumo que saiu da receita continuaria
     sendo descontado para sempre.
+
+    O plano pode trazer `setor` ('cozinha' ou 'bar', ver bar_import.py):
+    os pratos e as produções dele ficam marcados com esse setor.
     """
+    setor = plano.get("setor", "cozinha")
     conn = get_connection()
     try:
         rendimento = {p["nome"]: p["rendimento"] for p in plano["producoes"]}
         for nome in plano["insumos_novos"]:
             tipo = plano["tipos"].get(nome, "cru")
             conn.execute(
-                """INSERT INTO insumos (nome, unidade_medida, estoque_minimo, tipo, rendimento)
-                   VALUES (?, ?, 0, ?, ?)""",
-                (nome, plano["insumos"][nome], tipo, rendimento.get(nome)),
+                """INSERT INTO insumos (nome, unidade_medida, estoque_minimo, tipo, rendimento, setor)
+                   VALUES (?, ?, 0, ?, ?, ?)""",
+                (nome, plano["insumos"][nome], tipo, rendimento.get(nome),
+                 setor if tipo == "producao" else "cozinha"),
             )
 
         if corrigir_unidades:
@@ -881,12 +894,14 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
 
         for producao in plano["producoes"]:
             conn.execute(
-                "UPDATE insumos SET tipo = 'producao', rendimento = ? WHERE nome = ?",
-                (producao["rendimento"], producao["nome"]),
+                "UPDATE insumos SET tipo = 'producao', rendimento = ?, setor = ? WHERE nome = ?",
+                (producao["rendimento"], setor, producao["nome"]),
             )
 
         for nome in plano["pratos_novos"]:
-            conn.execute("INSERT INTO pratos (nome) VALUES (?)", (nome,))
+            conn.execute("INSERT INTO pratos (nome, setor) VALUES (?, ?)", (nome, setor))
+        for nome in plano["pratos"]:
+            conn.execute("UPDATE pratos SET setor = ? WHERE nome = ?", (setor, nome))
 
         ids_insumo = {
             d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM insumos").fetchall()
