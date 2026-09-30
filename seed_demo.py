@@ -74,6 +74,9 @@ INSUMOS = [
     ("Manteiga", "kg"),
     ("Cerveja long neck", "un"),
     ("Refrigerante lata", "un"),
+    ("Cachaça", "l"),
+    ("Limão", "kg"),
+    ("Açúcar", "kg"),
     ("Molho de tomate", "kg"),
 ]
 
@@ -116,7 +119,11 @@ FICHAS = {
     },
     "Cerveja long neck": {"Cerveja long neck": 1},
     "Refrigerante": {"Refrigerante lata": 1},
+    "Caipirinha": {"Cachaça": 0.05, "Limão": 0.08, "Açúcar": 0.02},
 }
+
+# Pratos do bar. O resto é da cozinha. É o que separa a saída do bar na tela.
+DO_BAR = {"Cerveja long neck", "Refrigerante", "Caipirinha"}
 
 # Média de vendas por dia em dia de semana comum.
 VOLUME_BASE = {
@@ -129,6 +136,7 @@ VOLUME_BASE = {
     "Hambúrguer artesanal": 20,
     "Cerveja long neck": 70,
     "Refrigerante": 45,
+    "Caipirinha": 25,
 }
 
 # Segunda a domingo: movimento sobe na sexta e no sábado.
@@ -173,6 +181,9 @@ FORNECEDOR = {
     "Manteiga": "Laticínios Serra Azul",
     "Cerveja long neck": "Atacadão Bebidas",
     "Refrigerante lata": "Atacadão Bebidas",
+    "Cachaça": "Atacadão Bebidas",
+    "Limão": "Hortifruti São João",
+    "Açúcar": "Distribuidora Central",
 }
 
 
@@ -319,7 +330,7 @@ def main():
         )
 
     for prato, ficha in FICHAS.items():
-        crud.cadastrar_prato(prato)
+        crud.cadastrar_prato(prato, "bar" if prato in DO_BAR else "cozinha")
         for insumo, quantidade in ficha.items():
             crud.definir_ficha_tecnica(prato, insumo, quantidade)
 
