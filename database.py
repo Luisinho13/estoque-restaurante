@@ -24,6 +24,7 @@ Estrutura:
 - producoes: cada leva produzida na cozinha (entrada do item produzido)
 - producoes_consumo: o que cada leva gastou, congelado no lançamento
 - compras: entradas de estoque (o que foi comprado)
+- baixas: saídas manuais, fora da venda e da produção (quebra, vencido...)
 - vendas_diarias: quantos de cada prato foram vendidos em um dia
 - contagens_fisicas: contagem manual mensal, para reconciliar com o teórico
 - usuarios: quem pode entrar no sistema (senha guardada como hash, nunca em texto)
@@ -279,6 +280,7 @@ def _fechar_as_paradas(agora, exceto=None):
             conexao = _conexoes.pop(chave, None)
             _ultimo_uso.pop(chave, None)
             if conexao is not None:
+                _com_escrita.discard(id(conexao))
                 try:
                     conexao.close()
                 except Exception:
@@ -335,29 +337,63 @@ class _ConexaoPostgres:
     def execute(self, sql, params=None):
         if self._chave is not None:
             _marcar_uso(self._chave)
+        try:
+            cursor = self._executar(sql, params)
+        except Exception as erro:
+            if not self._pode_refazer(erro):
+                raise
+            # A conexão morreu antes de qualquer escrita desta transação
+            # (rede, servidor reiniciado, faxina): abre outra e refaz o
+            # comando. Com escrita pendente não dá — o que foi escrito se
+            # perdeu com a conexão, e refazer só o último comando gravaria
+            # metade da operação.
+            self._conn = _substituta(self._chave, self._conn)
+            cursor = self._executar(sql, params)
+        if not sql.lstrip().upper().startswith("SELECT"):
+            _com_escrita.add(id(self._conn))
+        return _CursorPostgres(cursor)
+
+    def _executar(self, sql, params):
         cursor = self._conn.cursor()
         if params:
             cursor.execute(traduzir_placeholders(sql), params)
         else:
             cursor.execute(sql)
-        return _CursorPostgres(cursor)
+        return cursor
+
+    def _pode_refazer(self, erro):
+        import psycopg
+
+        return (
+            isinstance(erro, psycopg.OperationalError)
+            and self._conn.closed
+            and id(self._conn) not in _com_escrita
+        )
 
     def executescript(self, script):
         for comando in separar_comandos(_para_postgres(script)):
             self._conn.cursor().execute(comando)
+        _com_escrita.add(id(self._conn))
 
     def cursor(self):
         return _CursorPostgres(self._conn.cursor())
 
     def commit(self):
         self._conn.commit()
+        _com_escrita.discard(id(self._conn))
 
     def rollback(self):
         self._conn.rollback()
+        _com_escrita.discard(id(self._conn))
 
     def close(self):
         # A conexão é reaproveitada; fechar aqui anularia o ganho.
         pass
+
+
+# Conexões com escrita ainda não confirmada, por id(). Serve para saber se
+# um comando que falhou por queda de conexão pode ser refeito numa nova.
+_com_escrita = set()
 
 
 # O Postgres fica no Neon, cujo plano gratuito **suspende o banco** depois
@@ -383,33 +419,37 @@ class BancoIndisponivel(RuntimeError):
     """
 
 
-def _conexao_postgres():
+# "Ficou carregando" (relato do usuário em 30/09/2026): sem limite de
+# tempo, uma consulta cuja conexão morreu no caminho — Wi-Fi, o Neon
+# trocando de máquina — espera a resposta até o sistema operacional
+# desistir, o que no Linux do Streamlit Cloud passa de quinze minutos. E
+# uma gravação que espera a trava de outra fica esperando para sempre.
+# Os limites abaixo trocam a espera infinita por um erro em segundos, que
+# o app mostra com um botão de tentar de novo.
+LIMITES_DE_TEMPO = {
+    "keepalives": 1,
+    "keepalives_idle": 10,      # segundos parada até começar a sondar
+    "keepalives_interval": 5,
+    "keepalives_count": 3,      # ~25 s para dar a conexão por morta
+    "tcp_user_timeout": 30000,  # ms com dado enviado e sem resposta
+}
+TEMPO_MAXIMO_DE_COMANDO = "60s"
+TEMPO_MAXIMO_ESPERANDO_TRAVA = "15s"
+
+
+def _abrir_conexao(chave):
+    """Abre uma conexão nova para a sessão, com tentativas, e guarda."""
     import psycopg
     from psycopg.rows import dict_row
 
-    chave = _chave_da_sessao()
     with _trava:
-        conn = _conexoes.get(chave)
-        parada_ha = time.monotonic() - _ultimo_uso.get(chave, 0)
-    if conn is not None and not conn.closed:
-        if parada_ha < CONFERIR_CONEXAO_PARADA_HA:
-            _marcar_uso(chave)
-            return _ConexaoPostgres(conn, chave)
+        velha = _conexoes.pop(chave, None)
+    if velha is not None:
+        _com_escrita.discard(id(velha))
         try:
-            conn.execute("SELECT 1")
-            _marcar_uso(chave)
-            return _ConexaoPostgres(conn, chave)
+            velha.close()
         except Exception:
-            # Conexão caiu (timeout do servidor, rede). Abre outra.
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    # Zera antes de tentar: se a reconexão falhar, o objeto morto não pode
-    # continuar guardado, ou a próxima chamada tentaria usá-lo de novo.
-    with _trava:
-        _conexoes.pop(chave, None)
+            pass
 
     ultimo_erro = None
     for tentativa in range(TENTATIVAS_DE_CONEXAO):
@@ -420,7 +460,15 @@ def _conexao_postgres():
                 url_do_postgres(),
                 row_factory=dict_row,
                 connect_timeout=TIMEOUT_DE_CONEXAO,
+                **LIMITES_DE_TEMPO,
             )
+            # SET e não o parâmetro "options" da conexão, que o pooler do
+            # Neon pode recusar. O commit deixa a conexão sem transação.
+            conn.execute(
+                f"SET statement_timeout = '{TEMPO_MAXIMO_DE_COMANDO}'; "
+                f"SET lock_timeout = '{TEMPO_MAXIMO_ESPERANDO_TRAVA}'"
+            )
+            conn.commit()
         except Exception as erro:
             ultimo_erro = erro
             continue
@@ -428,11 +476,122 @@ def _conexao_postgres():
             _conexoes[chave] = conn
             _marcar_uso(chave)
             _iniciar_faxina()
-        return _ConexaoPostgres(conn, chave)
+        return conn
 
     raise BancoIndisponivel(
         f"O banco não respondeu depois de {TENTATIVAS_DE_CONEXAO} tentativas."
     ) from ultimo_erro
+
+
+def _substituta(chave, morta):
+    """A conexão que substitui uma que morreu no meio de uma operação.
+
+    Se outro pedaço da mesma operação já reabriu a conexão da sessão, é
+    ela que vale: todas as partes de uma operação têm de estar na mesma
+    conexão, senão o commit de uma não leva o que a outra escreveu.
+    """
+    with _trava:
+        atual = _conexoes.get(chave)
+    if atual is not None and atual is not morta and not atual.closed:
+        return atual
+    return _abrir_conexao(chave)
+
+
+def _conexao_postgres():
+    chave = _chave_da_sessao()
+    with _trava:
+        conn = _conexoes.get(chave)
+        parada_ha = time.monotonic() - _ultimo_uso.get(chave, 0)
+    if conn is not None and not conn.closed:
+        # Transação com erro não serve para mais nada — nem para o commit de
+        # quem a abriu. Acontece quando a tela mostra o erro de uma gravação
+        # e segue desenhando: sem isto, a consulta seguinte quebrava também.
+        if _transacao_com_erro(conn):
+            conn.rollback()
+            _com_escrita.discard(id(conn))
+        if parada_ha < CONFERIR_CONEXAO_PARADA_HA:
+            _marcar_uso(chave)
+            return _ConexaoPostgres(conn, chave)
+        try:
+            if _transacao_pendente(conn):
+                conn.rollback()
+            conn.execute("SELECT 1")
+            _marcar_uso(chave)
+            return _ConexaoPostgres(conn, chave)
+        except Exception:
+            pass   # conexão caiu (timeout do servidor, rede): abre outra
+
+    return _ConexaoPostgres(_abrir_conexao(chave), chave)
+
+
+def _transacao_com_erro(conn) -> bool:
+    from psycopg.pq import TransactionStatus
+
+    return conn.info.transaction_status == TransactionStatus.INERROR
+
+
+def _transacao_pendente(conn) -> bool:
+    from psycopg.pq import TransactionStatus
+
+    return conn.info.transaction_status in (
+        TransactionStatus.INTRANS, TransactionStatus.INERROR
+    )
+
+
+def comecar_execucao():
+    """Chamada no topo de cada execução do app, antes de qualquer consulta.
+
+    Desfaz o que a execução anterior desta sessão deixou aberto na
+    conexão. Duas situações, as duas silenciosas:
+
+    - **Transação com erro.** Um comando que falha deixa a conexão
+      recusando tudo até um rollback. Como a conexão é guardada por sessão,
+      um erro numa gravação sem rollback travava todos os cliques seguintes
+      daquela aba, até ela ficar um minuto parada.
+    - **Transação aberta.** Toda consulta abre uma transação, e as telas
+      só leem, sem commit. A conexão ficava "em transação" entre um clique
+      e outro, segurando trava de leitura, e uma gravação interrompida no
+      meio ficava pendurada segurando trava de escrita.
+
+    No começo de uma execução nenhuma operação desta sessão está em
+    andamento, então desfazer é seguro. Não abre conexão se não houver.
+    """
+    if backend() != "postgres":
+        return
+    chave = _chave_da_sessao()
+    with _trava:
+        conn = _conexoes.get(chave)
+    if conn is None or conn.closed:
+        return
+    try:
+        if _transacao_pendente(conn):
+            conn.rollback()
+        _com_escrita.discard(id(conn))
+    except Exception:
+        descartar_conexao()
+
+
+def erro_de_conexao(erro) -> bool:
+    """O erro é de conexão ou de tempo esgotado no Postgres, e não defeito."""
+    if backend() != "postgres":
+        return False
+    import psycopg
+
+    return isinstance(erro, psycopg.OperationalError)
+
+
+def descartar_conexao():
+    """Joga fora a conexão desta sessão; a próxima consulta abre outra."""
+    chave = _chave_da_sessao()
+    with _trava:
+        conn = _conexoes.pop(chave, None)
+        _ultimo_uso.pop(chave, None)
+    if conn is not None:
+        _com_escrita.discard(id(conn))
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 # ---------- Conexão ----------
@@ -505,6 +664,15 @@ ESQUEMA = """
             fornecedor TEXT,
             observacao TEXT,
             numero_nota TEXT             -- nº da NF, quando a compra veio de uma nota
+        );
+
+        CREATE TABLE IF NOT EXISTS baixas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id),
+            quantidade REAL NOT NULL,    -- quanto saiu, na unidade do insumo
+            data TEXT NOT NULL,          -- formato YYYY-MM-DD
+            motivo TEXT NOT NULL,        -- quebra, vencido, consumo da equipe...
+            observacao TEXT
         );
 
         CREATE TABLE IF NOT EXISTS vendas_diarias (

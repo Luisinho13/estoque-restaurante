@@ -63,13 +63,19 @@ def _marcadores(quantidade: int) -> str:
     return ", ".join("?" * quantidade)
 
 
-def _inserir_varias(conn, tabela: str, colunas: tuple, linhas: list[tuple]):
-    """INSERT de várias linhas, um comando por lote."""
+def _inserir_varias(conn, tabela: str, colunas: tuple, linhas: list[tuple],
+                    sufixo: str = ""):
+    """INSERT de várias linhas, um comando por lote.
+
+    `sufixo` vai depois do VALUES, para um ON CONFLICT. Com ele, quem chama
+    não pode repetir a mesma chave no lote: o Postgres recusa um comando
+    que atualize a mesma linha duas vezes.
+    """
     grupo = f"({_marcadores(len(colunas))})"
     for lote in _em_lotes(linhas):
         conn.execute(
             f"INSERT INTO {tabela} ({', '.join(colunas)}) "
-            f"VALUES {', '.join([grupo] * len(lote))}",
+            f"VALUES {', '.join([grupo] * len(lote))} {sufixo}",
             [valor for linha in lote for valor in linha],
         )
 
@@ -110,6 +116,40 @@ def _atualizar_varias(conn, tabela: str, coluna: str, chave: str, valores: dict)
             [v for k in lote for v in (k, valores[k])] + lote,
         )
     return existentes
+
+
+def _atualizar_linhas(conn, tabela: str, colunas: dict, linhas: dict):
+    """UPDATE de várias colunas em várias linhas, achadas pelo id.
+
+    `colunas` é {coluna: tipo SQL} e `linhas` é {id: (valores na ordem de
+    `colunas`)}. O CAST de cada valor é pelo mesmo motivo do de
+    `_atualizar_varias`. O lote é menor porque cada linha leva dois
+    parâmetros por coluna.
+    """
+    ids = sorted(linhas)
+    por_lote = max(1, 900 // (2 * len(colunas) + 1))
+    for inicio in range(0, len(ids), por_lote):
+        lote = ids[inicio:inicio + por_lote]
+        partes, parametros = [], []
+        for posicao, (coluna, tipo) in enumerate(colunas.items()):
+            casos = " ".join(f"WHEN ? THEN CAST(? AS {tipo})" for _ in lote)
+            partes.append(f"{coluna} = CASE id {casos} END")
+            parametros += [v for i in lote for v in (i, linhas[i][posicao])]
+        conn.execute(
+            f"UPDATE {tabela} SET {', '.join(partes)} "
+            f"WHERE id IN ({_marcadores(len(lote))})",
+            parametros + lote,
+        )
+
+
+def _apagar_por_id(conn, tabela: str, ids: list) -> int:
+    """DELETE de várias linhas pelo id, um comando por lote."""
+    apagadas = 0
+    for lote in _em_lotes(sorted(ids)):
+        apagadas += conn.execute(
+            f"DELETE FROM {tabela} WHERE id IN ({_marcadores(len(lote))})", lote
+        ).rowcount
+    return apagadas
 
 
 # ---------- Cadastros ----------
@@ -232,7 +272,7 @@ def definir_ficha_tecnica(prato_nome: str, insumo_nome: str, quantidade_por_prat
 def excluir_insumo(nome: str):
     """
     Exclui um insumo e todo o histórico ligado a ele (ficha técnica, ficha
-    e lançamentos de produção, compras e contagens físicas). Use com
+    e lançamentos de produção, compras, baixas e contagens físicas). Use com
     cuidado: não tem como desfazer.
     """
     conn = get_connection()
@@ -256,6 +296,7 @@ def excluir_insumo(nome: str):
     )
     conn.execute("DELETE FROM producoes WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM compras WHERE insumo_id = ?", (insumo_id,))
+    conn.execute("DELETE FROM baixas WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM contagens_fisicas WHERE insumo_id = ?", (insumo_id,))
     conn.execute(
         """DELETE FROM contagens_itens WHERE item_id IN
@@ -1244,6 +1285,146 @@ def excluir_producao(producao_id: int):
     conn.close()
 
 
+def apagar_producoes(ids: list[int]) -> int:
+    """Apaga várias levas de uma vez, tudo ou nada (ver `excluir_producao`)."""
+    if not ids:
+        raise ValueError("Nenhuma produção escolhida.")
+    conn = get_connection()
+    try:
+        for lote in _em_lotes(sorted(set(ids))):
+            conn.execute(
+                f"DELETE FROM producoes_consumo WHERE producao_id IN ({_marcadores(len(lote))})",
+                lote,
+            )
+        apagadas = _apagar_por_id(conn, "producoes", ids)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return apagadas
+
+
+# ---------- Corrigir lançamentos ----------
+# Lançamento em dobro (a nota importada duas vezes, a compra digitada na
+# nota manual e na tela de compra) não tinha como sair: a compra não tinha
+# botão de apagar. Pedido do usuário em 30/09/2026.
+
+def compras_no_periodo(inicio: str, fim: str) -> list[dict]:
+    """As compras lançadas entre duas datas (inclusive), das mais recentes para trás."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT c.id, c.data, i.nome AS insumo, c.quantidade, i.unidade_medida,
+               COALESCE(c.fornecedor, '') AS fornecedor,
+               COALESCE(c.numero_nota, '') AS numero_nota,
+               COALESCE(c.observacao, '') AS observacao
+        FROM compras c JOIN insumos i ON i.id = c.insumo_id
+        WHERE c.data >= ? AND c.data <= ?
+        ORDER BY c.data DESC, c.id DESC
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def _apagar_lancamentos(tabela: str, ids: list[int]) -> int:
+    if not ids:
+        raise ValueError("Nenhum lançamento escolhido.")
+    conn = get_connection()
+    try:
+        apagadas = _apagar_por_id(conn, tabela, ids)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return apagadas
+
+
+def apagar_compras(ids: list[int]) -> int:
+    """Apaga compras lançadas. O estoque perde o que elas tinham somado."""
+    return _apagar_lancamentos("compras", ids)
+
+
+# ---------- Baixa de estoque ----------
+# Saída que não é venda nem produção: a garrafa que quebrou, o peixe que
+# venceu, a refeição da equipe. Sem ela, essa saída só aparecia como
+# "perda" na contagem seguinte, sem explicação. Pedido do usuário em
+# 30/09/2026.
+
+MOTIVOS_DE_BAIXA = (
+    "Quebra ou derramamento",
+    "Vencido ou estragado",
+    "Consumo da equipe",
+    "Ajuste de lançamento",
+    "Outro",
+)
+
+
+def registrar_baixas_em_lote(itens: list[dict], data: str, motivo: str,
+                             observacao: str = None) -> int:
+    """Tira do estoque vários insumos de uma vez, tudo ou nada.
+
+    `itens` é uma lista de {'insumo': nome, 'quantidade': float}, na
+    unidade do insumo. Mesmo contrato da nota manual: nada é gravado se um
+    nome estiver errado ou uma quantidade não for positiva.
+    """
+    if not itens:
+        raise ValueError("Nenhum item para dar baixa.")
+    if motivo not in MOTIVOS_DE_BAIXA:
+        raise ValueError(f"Motivo desconhecido: '{motivo}'.")
+    conn = get_connection()
+    try:
+        ids = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+        }
+        linhas = []
+        for item in itens:
+            quantidade = float(item["quantidade"])
+            if quantidade <= 0:
+                raise ValueError(f"A quantidade de '{item['insumo']}' precisa ser maior que zero.")
+            if item["insumo"] not in ids:
+                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+            linhas.append((ids[item["insumo"]], quantidade, data, motivo, observacao))
+        _inserir_varias(
+            conn, "baixas", ("insumo_id", "quantidade", "data", "motivo", "observacao"), linhas
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(linhas)
+
+
+def baixas_no_periodo(inicio: str, fim: str) -> list[dict]:
+    """As baixas lançadas entre duas datas (inclusive), das mais recentes para trás."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT b.id, b.data, i.nome AS insumo, b.quantidade, i.unidade_medida,
+               b.motivo, COALESCE(b.observacao, '') AS observacao
+        FROM baixas b JOIN insumos i ON i.id = b.insumo_id
+        WHERE b.data >= ? AND b.data <= ?
+        ORDER BY b.data DESC, b.id DESC
+        """,
+        (inicio, fim),
+    ).fetchall()
+    conn.close()
+    return [dict(linha) for linha in linhas]
+
+
+def apagar_baixas(ids: list[int]) -> int:
+    """Apaga baixas lançadas: o que elas tinham tirado volta ao estoque."""
+    return _apagar_lancamentos("baixas", ids)
+
+
 # ---------- Estoque teórico ----------
 
 # Todo movimento que mexe no estoque, numa lista só: cada linha diz qual
@@ -1254,11 +1435,12 @@ def excluir_producao(producao_id: int):
 # - compra: entra o insumo comprado;
 # - produção: entra o item produzido;
 # - venda: sai o que a ficha do prato manda (só o primeiro nível);
-# - gasto de produção: sai o que cada leva gastou, como foi gravado.
+# - gasto de produção: sai o que cada leva gastou, como foi gravado;
+# - baixa: sai o que foi tirado à mão (quebra, vencido, consumo da equipe).
 #
 # `setor` diz de onde veio o movimento, cozinha ou bar: o do prato vendido,
-# ou o da produção que entrou ou gastou. Compra não tem setor (o açúcar e o
-# limão servem aos dois). É por ele que a tela de saída separa a do bar.
+# ou o da produção que entrou ou gastou. Compra e baixa não têm setor (o
+# açúcar e o limão servem aos dois). É por ele que a tela de saída separa a do bar.
 SQL_MOVIMENTOS = """
     SELECT insumo_id, data, quantidade AS entrada, 0.0 AS saida,
            CAST(NULL AS TEXT) AS setor
@@ -1277,6 +1459,9 @@ SQL_MOVIMENTOS = """
     FROM producoes_consumo pc
     JOIN producoes p ON p.id = pc.producao_id
     JOIN insumos prod ON prod.id = p.insumo_id
+    UNION ALL
+    SELECT insumo_id, data, 0.0, quantidade, CAST(NULL AS TEXT)
+    FROM baixas
 """
 
 def calcular_estoque_teorico(insumo_nome: str) -> dict:
@@ -1396,6 +1581,28 @@ def mapear_produto_nfe(fornecedor_cnpj: str, codigo_produto: str, descricao_prod
     conn.close()
 
 
+def mapeamentos_nfe(fornecedor_cnpj: str) -> dict:
+    """{código do produto: {'insumo_nome', 'fator_conversao'}} de um fornecedor."""
+    conn = get_connection()
+    linhas = conn.execute(
+        """
+        SELECT m.codigo_produto, m.fator_conversao, i.nome AS insumo_nome
+        FROM mapeamento_produtos_nfe m
+        JOIN insumos i ON i.id = m.insumo_id
+        WHERE m.fornecedor_cnpj = ?
+        """,
+        (fornecedor_cnpj,),
+    ).fetchall()
+    conn.close()
+    return {
+        linha["codigo_produto"]: {
+            "insumo_nome": linha["insumo_nome"],
+            "fator_conversao": linha["fator_conversao"],
+        }
+        for linha in linhas
+    }
+
+
 def buscar_mapeamento_nfe(fornecedor_cnpj: str, codigo_produto: str):
     """Retorna o mapeamento (insumo + fator de conversão) para um produto, ou None."""
     conn = get_connection()
@@ -1445,6 +1652,89 @@ def mapear_produto_zig(sku: str, nome_produto: str, prato_nome: str = None,
     )
     conn.commit()
     conn.close()
+
+
+def salvar_mapeamentos_zig(mapear: list[dict], remover: list[str] = ()) -> dict:
+    """Grava vários mapeamentos da Zig de uma vez, tudo ou nada.
+
+    `mapear` traz {'sku', 'nome_produto', 'prato' (None para não
+    controlar)}; `remover` é a lista de SKUs a apagar. Um produto por vez
+    eram três idas ao banco por linha — salvar trinta produtos levava mais
+    de dez segundos (relato do usuário em 30/09/2026). Aqui são quatro.
+    """
+    por_sku = {m["sku"]: m for m in mapear}   # SKU repetido: vale o último
+    conn = get_connection()
+    try:
+        ids = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM pratos").fetchall()
+        }
+        linhas = []
+        for sku, m in por_sku.items():
+            if m["prato"] and m["prato"] not in ids:
+                raise ValueError(f"Prato '{m['prato']}' não encontrado.")
+            linhas.append((sku, m["nome_produto"], ids.get(m["prato"]), 0 if m["prato"] else 1))
+        removidos = 0
+        for lote in _em_lotes(sorted(set(remover))):
+            removidos += conn.execute(
+                f"DELETE FROM mapeamento_produtos_zig WHERE sku IN ({_marcadores(len(lote))})",
+                lote,
+            ).rowcount
+        _inserir_varias(
+            conn, "mapeamento_produtos_zig", ("sku", "nome_produto", "prato_id", "ignorar"),
+            linhas,
+            sufixo="""ON CONFLICT(sku)
+                      DO UPDATE SET nome_produto = excluded.nome_produto,
+                                    prato_id = excluded.prato_id,
+                                    ignorar = excluded.ignorar""",
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return {"salvos": len(linhas), "removidos": removidos}
+
+
+def salvar_mapeamentos_nfe(fornecedor_cnpj: str, itens: list[dict]) -> int:
+    """Grava vários mapeamentos de NF-e de uma vez, tudo ou nada.
+
+    `itens` traz {'codigo_produto', 'descricao_produto', 'insumo',
+    'fator_conversao'}. Mesmo motivo de `salvar_mapeamentos_zig`.
+    """
+    por_codigo = {i["codigo_produto"]: i for i in itens}
+    conn = get_connection()
+    try:
+        ids = {
+            linha["nome"]: linha["id"]
+            for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+        }
+        linhas = []
+        for codigo, item in por_codigo.items():
+            if item["insumo"] not in ids:
+                raise ValueError(f"Insumo '{item['insumo']}' não encontrado.")
+            if not item["fator_conversao"] or item["fator_conversao"] <= 0:
+                raise ValueError(f"O fator de '{item['descricao_produto']}' precisa ser maior que zero.")
+            linhas.append((fornecedor_cnpj, codigo, item["descricao_produto"],
+                           ids[item["insumo"]], float(item["fator_conversao"])))
+        _inserir_varias(
+            conn, "mapeamento_produtos_nfe",
+            ("fornecedor_cnpj", "codigo_produto", "descricao_produto", "insumo_id",
+             "fator_conversao"),
+            linhas,
+            sufixo="""ON CONFLICT(fornecedor_cnpj, codigo_produto)
+                      DO UPDATE SET insumo_id = excluded.insumo_id,
+                                    fator_conversao = excluded.fator_conversao,
+                                    descricao_produto = excluded.descricao_produto""",
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return len(linhas)
 
 
 def buscar_mapeamento_zig(sku: str):

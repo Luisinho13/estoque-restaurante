@@ -38,7 +38,9 @@ AREAS = {
     "zig": "Importar Vendas (PDV)",
     "venda": "Lançar Venda do Dia",
     "producao": "Lançar Produção",
+    "baixa": "Baixa de Estoque",
     "contagem": "Contagem Física",
+    "corrigir": "Corrigir Lançamentos",
 }
 
 # Sugestão de acesso para quem é aprovado sem nenhuma escolha explícita:

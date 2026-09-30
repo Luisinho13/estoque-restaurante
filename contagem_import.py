@@ -197,6 +197,10 @@ ALIMENTOS = {
     "XAROPE GLICOSE DE MILHO 350 GR (YOKI)": _i("Glucose de milho", 0.35, "kg"),
     # TEMPEROS/GRAOS/FARINHAS
     "AÇAFRÃO PÓ PCT 500G": _i("Açafrão", 0.5, "kg"),
+    # "alho frito" é Alho em NOMES_CANONICOS.
+    "ALHO FRITO 500GR": _i("Alho", 0.5, "kg"),
+    # Nenhuma ficha usa, e o pacote não diz o peso: fica contado em pacote.
+    "CHIMICHURY": _i("Chimichurri", 1, "pacote"),
     "AMENDOA LAMINADA - 1 KG (NÃO COMPRAR DA CASA DO CONFEITEIRO) - QUEBRADIÇA":
         _i("Amêndoa laminada", 1, "kg"),
     "AMENDOAS INTEIRA": _i("Amêndoa inteira", 1, "pacote"),
@@ -253,6 +257,7 @@ ALIMENTOS = {
     "QUEIJO MUSSARELA PEÇA (PEÇA 4KG) CATUPIRY/PRESIDENTE/SCALA": _i("Queijo mussarela", 4, "kg"),
     "QUEIJO PARMESÃO 5 ESTRELAS/PINHALZINHO PÇ 6KG (DADINHO TAPIOCA)": _i("Queijo parmesão", 6, "kg"),
     "QUEIJO PARMESÃO PEÇA (PEÇA 7,5KG) MARCA CAPA PRETA": _i("Queijo parmesão", 7.5, "kg"),
+    "QUEIJO PARMESÃO PEÇA (PEÇA 7,5KG) PRESIDENT": _i("Queijo parmesão", 7.5, "kg"),
     "QUEIJO PROVOLONE (PROVOLETE)": _i("Queijo provolone", 1, "peça"),
     "QUEIJO TIPO GOLDA (PEÇA 2KG)": _i("Queijo gouda", 2, "kg"),
     "QUEIJO TIPO REINO (PEÇA 2KG)": _i("Queijo do reino", 2, "kg"),
@@ -261,6 +266,9 @@ ALIMENTOS = {
     "SALAME SADIA/PERDIGÃO PÇ 0,900G A 1KG": _i("Salame", 1, "un"),
     # CARNES/AVES
     "APARAS DE CARNE KG (CAMERA - 3)": _i("Apara de carne", 1, "kg"),
+    # Na planilha de 28/09/2026 a apara da câmara 3 ganhou duas linhas, a
+    # da equipe e a do molho. A do molho é a mesma da cozinha.
+    "APARAS DE CARNE KG (CAMERA - 3) PARA MOLHO": _i("Apara de carne", 1, "kg"),
     "BARRIGA DE PORCO": _i("Barriga de porco", 1, "kg"),
     "BARRIGA DE PORCO PORCIONADO": _i("Barriga de porco", 1, "kg"),
     "BOMBOM DE ALCATRA (BABY BEEF PEÇA)": _i("Alcatra", 1, "kg"),
@@ -280,6 +288,7 @@ ALIMENTOS = {
     "FILET MIGNON PORCIONADO STEAK TARTARE": _i("Mignon", 1, "kg"),
     "FILET MIGNON PORCIONADO ISCA DE MIGNON": _i("Mignon", 1, "kg"),
     "LINGUICA TOSCANA PORCIONADA (MINI HAMBURGUER) (SADIA / PERDIGÃO)": _i("Linguiça toscana", 1, "kg"),
+    "LINGUIÇA TOSCANA": _i("Linguiça toscana", 1, "kg"),
     "MINI HAMBURGUE": _i("Hambúrguer", 0.1, "kg", "pacote"),
     "MIOLO DE ALCATRA KG": _i("Alcatra", 1, "kg"),
     "MIOLO/ CORAÇÃO DE ALCATRA PORCIONADO (CAMERA - 3) PORÇÃO 180gr": _i("Alcatra", 1, "kg"),
@@ -287,6 +296,8 @@ ALIMENTOS = {
     "MOCOTÓ SERRADO": _i("Mocotó", 1, "kg"),
     "OSSO PARA CALDO": _i("Osso", 1, "kg"),
     "OSSOBUCO (CORTES SELECIONADOS)": _i("Ossobuco", 1, "kg"),
+    # Contado em unidade na planilha de 28/09 e sem ficha técnica que o cite.
+    "POLPETONE": _i("Polpetone", 1, "un"),
     "PEITO DE FRANGO PORCIONADO (GOURMET)": _i("Frango", 1, "kg"),
     "PEITO DE FRANGO PORCIONADO - ISCAS (FRANGO GOURMET) / (CAMARA 3)": _i("Frango", 0.3, "kg", "pacote"),
     "PEITO DE FRANGO PORCIONADO - KIDS": _i("Frango", 1, "kg"),
@@ -300,6 +311,7 @@ ALIMENTOS = {
     # estoques separados na prática, e a refeição da equipe não tem ficha
     # técnica, então apareceria como perda no insumo da cozinha.
     "ACEM KG": _i("Acém", 1, "kg"),
+    "APARAS DE CARNE KG (CAMERA - 3) FUNCIONARIO": _i("Apara de carne (funcionários)", 1, "kg"),
     "APARAS DE FRANGO": _i("Apara de frango", 1, "kg"),
     "BISTECA SUINA KG": _i("Bisteca suína", 1, "kg"),
     "CARNE MOÍDA": _i("Carne moída", 1, "kg"),
@@ -316,11 +328,13 @@ ALIMENTOS = {
     "LOMBO SUÍNO PALMITO": _i("Lombo suíno", 1, "kg"),
     "PANGASSIUS": _i("Pangasius", 1, "kg"),
     "PATINHO KG": _i("Patinho", 1, "kg"),
+    "PERNIL": _i("Pernil", 1, "kg"),
     "PEITO BOVINO": _i("Peito bovino", 1, "kg"),
     "SALSICHA": _i("Salsicha", 1, "kg"),
     "SASSAMIZINHO DE FRANGO": _i("Sassami", 1, "kg"),
     # PEIXES
     "BACALHAU DESFIADO DESSALGADO": _i("Bacalhau", 1, "kg"),
+    "BACALHAU EM POSTA": _i("Bacalhau", 1, "kg"),
     "CAMARÃO 11/15 (CÂMARA 3 /COZINHA)": _i("Camarão", 1, "kg"),
     "CAMARÃO 7 BARBA KG C/15KG": _i("Camarão sete barbas", 1, "kg"),
     "CAMARÃO 7 BARBA PORCIONADO (CÂMARA 3 / COZINHA)": _i("Camarão sete barbas", 1, "kg"),
@@ -505,30 +519,76 @@ def nome_de_bebida(descricao: str) -> str:
 
 # ---------- Leitura da planilha ----------
 
-def _eh_cabecalho(medida, coluna_c) -> bool:
-    return str(medida or "").strip() == "Medida" or str(coluna_c or "").strip().upper() == "CONTAGEM"
+def _eh_cabecalho(medida, coluna_contagem) -> bool:
+    return (str(medida or "").strip() == "Medida"
+            or str(coluna_contagem or "").strip().upper() == "CONTAGEM")
+
+
+def _colunas(aba) -> tuple[int, int, int]:
+    """Onde estão a descrição, a medida e a contagem, pela linha de cabeçalho.
+
+    A planilha de 23/09 começava na coluna A; a de 28/09 ganhou três
+    colunas à esquerda e a contagem foi para a G. O cabeçalho ("Medida",
+    e depois "CONTAGEM") é o que não muda: a descrição fica logo antes da
+    medida, e a contagem é a primeira coluna "CONTAGEM" depois dela.
+    """
+    for linha in aba.iter_rows(max_row=30, values_only=True):
+        textos = [str(c or "").strip() for c in linha]
+        if "Medida" not in textos:
+            continue
+        medida = textos.index("Medida")
+        contagem = next(
+            (i for i in range(medida + 1, len(textos)) if textos[i].upper() == "CONTAGEM"),
+            medida + 1,
+        )
+        return max(medida - 1, 0), medida, contagem
+    return 0, 1, 2
+
+
+def numero_da_planilha(valor):
+    """O número de uma célula de contagem, ou None se estiver em branco.
+
+    A equipe digita com vírgula e muitas vezes como texto ("28,400",
+    ",35"). Vírgula é sempre decimal aqui: ninguém conta mil garrafas.
+    Texto que não é número levanta ValueError, para não virar zero calado.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip().replace(" ", "")
+    if not texto:
+        return None
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    return float(texto)
 
 
 def ler_planilha(arquivo) -> list[dict]:
     """As linhas de alimentos e bebidas da aba de contagem, na ordem da planilha.
 
-    Devolve {'secao', 'ordem', 'descricao', 'medida', 'bebida'}. Uma
-    descrição repetida em duas seções (as aparas de carne e a calabresa
-    aparecem na cozinha e de novo em "proteínas funcionários") entra só
-    na primeira: a mesma prateleira contada duas vezes dobraria o estoque.
+    Devolve {'secao', 'ordem', 'descricao', 'medida', 'bebida', 'contagem',
+    'contagem_invalida'}: 'contagem' é o número digitado na coluna
+    CONTAGEM (None se em branco) e 'contagem_invalida' guarda o texto
+    quando ele não é número. Uma descrição repetida em duas seções entra
+    só na primeira: a mesma prateleira contada duas vezes dobraria o
+    estoque.
     """
     livro = openpyxl.load_workbook(arquivo, data_only=True, read_only=True)
     if ABA not in livro.sheetnames:
         raise ValueError(f"A planilha não tem a aba '{ABA}'.")
 
+    aba = livro[ABA]
+    col_descricao, col_medida, col_contagem = _colunas(aba)
     linhas, vistas = [], set()
     secao, bebida = None, True
-    for numero, linha in enumerate(livro[ABA].iter_rows(values_only=True), 1):
-        descricao, medida, coluna_c = (list(linha) + [None] * 3)[:3]
-        descricao = " ".join(str(descricao or "").split())
+    for numero, linha in enumerate(aba.iter_rows(values_only=True), 1):
+        celulas = list(linha) + [None] * (col_contagem + 1)
+        descricao = " ".join(str(celulas[col_descricao] or "").split())
+        medida, contagem = celulas[col_medida], celulas[col_contagem]
         if not descricao:
             continue
-        if _eh_cabecalho(medida, coluna_c):
+        if _eh_cabecalho(medida, contagem):
             secao = descricao
             if chave(secao) == chave(PRIMEIRA_SECAO_DE_ALIMENTOS):
                 bebida = False
@@ -540,12 +600,18 @@ def ler_planilha(arquivo) -> list[dict]:
         if chave(descricao) in vistas:
             continue
         vistas.add(chave(descricao))
+        try:
+            valor, invalido = numero_da_planilha(contagem), None
+        except ValueError:
+            valor, invalido = None, str(contagem)
         linhas.append({
             "secao": secao,
             "ordem": numero,
             "descricao": descricao,
             "medida": " ".join(str(medida or "").split()),
             "bebida": bebida,
+            "contagem": valor,
+            "contagem_invalida": invalido,
         })
     livro.close()
     return linhas
@@ -571,10 +637,17 @@ def montar_plano(linhas: list[dict]) -> dict:
       insumos cuja unidade mudou na planilha e que ainda não têm nenhum
       histórico, então podem trocar de unidade sem estragar nada.
     """
+    from cozinha_fria import porcionado_de
+
     conn = get_connection()
     existentes = {
         linha["nome"]: linha["unidade_medida"]
         for linha in conn.execute("SELECT nome, unidade_medida FROM insumos").fetchall()
+    }
+    producoes = {
+        linha["nome"] for linha in conn.execute(
+            "SELECT nome FROM insumos WHERE tipo = 'producao'"
+        ).fetchall()
     }
     # Insumo com qualquer número gravado na unidade antiga — compra,
     # contagem, produção, ficha, fator de nota fiscal — não pode trocar de
@@ -594,6 +667,11 @@ def montar_plano(linhas: list[dict]) -> dict:
                 OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)"""
         ).fetchall()
     }
+    atuais = conn.execute(
+        """SELECT ic.id, ic.descricao, i.nome AS insumo,
+                  EXISTS (SELECT 1 FROM contagens_itens x WHERE x.item_id = ic.id) AS contado
+             FROM itens_contagem ic JOIN insumos i ON i.id = ic.insumo_id"""
+    ).fetchall()
     conn.close()
 
     itens, novos, a_definir, problemas, ignoradas = [], {}, [], [], []
@@ -617,6 +695,12 @@ def montar_plano(linhas: list[dict]) -> dict:
                     "em contagem_import.ALIMENTOS."
                 )
                 continue
+            # Carne porcionada vai para a produção dela, se a cozinha fria
+            # já foi separada (cozinha_fria.py). Fator e unidade são os da
+            # linha: a peça e o porcionado pesam igual.
+            porcionado = porcionado_de(linha["descricao"])
+            if porcionado in producoes:
+                destino = (porcionado, *tuple(destino)[1:])
 
         insumo, fator, unidade, conta_em = (tuple(destino) + (None,))[:4]
         unidade_contagem = conta_em or unidade_contagem
@@ -653,6 +737,28 @@ def montar_plano(linhas: list[dict]) -> dict:
         if fator is None:
             a_definir.append(item)
 
+    # Linha do sistema que não está mais na planilha (produto que saiu,
+    # descrição reescrita) sai da contagem, ou a tela mostraria para sempre
+    # uma linha que ninguém conta. Só sai a linha: o insumo fica, com o
+    # que tiver de compra e ficha. Linha que já tem contagem gravada fica,
+    # porque apagá-la apagaria a história da contagem.
+    na_planilha = {chave(linha["descricao"]) for linha in linhas}
+    saem, ficam = [], []
+    for atual in atuais:
+        if chave(atual["descricao"]) in na_planilha:
+            continue
+        (ficam if atual["contado"] else saem).append(dict(atual))
+    if atuais and len(saem) + len(ficam) > len(atuais) / 2:
+        problemas.append(
+            f"Mais da metade das linhas da contagem atual ({len(saem) + len(ficam)} de "
+            f"{len(atuais)}) não está nesta planilha. Parece outra planilha, não uma "
+            "versão nova da mesma."
+        )
+    # O insumo que perde a última linha da planilha passa a ser contado
+    # direto, na seção "Fora da planilha". Vale avisar.
+    continuam = {i["insumo"] for i in itens} | {f["insumo"] for f in ficam}
+    sem_linha = sorted({s["insumo"] for s in saem} - continuam)
+
     return {
         "itens": itens,
         "insumos_novos": novos,
@@ -660,27 +766,35 @@ def montar_plano(linhas: list[dict]) -> dict:
         "ignoradas": ignoradas,
         "problemas": problemas,
         "unidades_a_corrigir": a_corrigir,
+        "saem": saem,
+        "ficam": ficam,
+        "insumos_sem_linha": sem_linha,
     }
 
 
 def aplicar_plano(plano: dict) -> dict:
-    """Grava o plano: cria os insumos que faltam e os itens da contagem.
+    """Grava o plano: cria os insumos que faltam, os itens da contagem, e
+    tira as linhas que saíram da planilha.
 
     Tudo ou nada. Reimportar a mesma planilha não duplica: o item é
     achado pela descrição e atualizado. Um fator que o usuário já
     preencheu no app **não** é apagado por um "a definir" daqui — o
     número digitado por quem conhece o produto vale mais que o branco.
+
+    Grava em lotes: linha a linha eram mais de mil idas ao banco, e cada
+    uma cruza dos EUA até São Paulo (ver "Gravação em lote" no crud).
     """
+    from crud import _apagar_por_id, _atualizar_linhas, _inserir_varias
+
     if plano["problemas"]:
         raise ValueError("A planilha tem problemas a resolver antes de importar.")
 
     conn = get_connection()
     try:
-        for nome, unidade in plano["insumos_novos"].items():
-            conn.execute(
-                "INSERT INTO insumos (nome, unidade_medida, estoque_minimo) VALUES (?, ?, 0)",
-                (nome, unidade),
-            )
+        _inserir_varias(
+            conn, "insumos", ("nome", "unidade_medida", "estoque_minimo"),
+            [(nome, unidade, 0) for nome, unidade in plano["insumos_novos"].items()],
+        )
         for nome, (_, unidade) in plano.get("unidades_a_corrigir", {}).items():
             conn.execute(
                 "UPDATE insumos SET unidade_medida = ? WHERE nome = ?", (unidade, nome)
@@ -689,35 +803,40 @@ def aplicar_plano(plano: dict) -> dict:
             linha["nome"]: linha["id"]
             for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
         }
+        atuais = {
+            linha["descricao"]: linha
+            for linha in conn.execute(
+                "SELECT id, descricao, fator_conversao FROM itens_contagem"
+            ).fetchall()
+        }
 
-        criados = atualizados = 0
+        novas, mudadas = [], {}
         for item in plano["itens"]:
-            atual = conn.execute(
-                "SELECT id, fator_conversao FROM itens_contagem WHERE descricao = ?",
-                (item["descricao"],),
-            ).fetchone()
+            atual = atuais.get(item["descricao"])
             fator = item["fator"]
             if atual is None:
-                conn.execute(
-                    """INSERT INTO itens_contagem
-                           (descricao, secao, ordem, unidade_contagem, insumo_id, fator_conversao)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (item["descricao"], item["secao"], item["ordem"],
-                     item["unidade_contagem"], ids[item["insumo"]], fator),
-                )
-                criados += 1
-            else:
-                if fator is None:
-                    fator = atual["fator_conversao"]
-                conn.execute(
-                    """UPDATE itens_contagem
-                          SET secao = ?, ordem = ?, unidade_contagem = ?,
-                              insumo_id = ?, fator_conversao = ?
-                        WHERE id = ?""",
-                    (item["secao"], item["ordem"], item["unidade_contagem"],
-                     ids[item["insumo"]], fator, atual["id"]),
-                )
-                atualizados += 1
+                novas.append((item["descricao"], item["secao"], item["ordem"],
+                               item["unidade_contagem"], ids[item["insumo"]], fator))
+                continue
+            if fator is None:
+                fator = atual["fator_conversao"]
+            mudadas[atual["id"]] = (item["secao"], item["ordem"], item["unidade_contagem"],
+                                    ids[item["insumo"]], fator)
+
+        removidas = _apagar_por_id(
+            conn, "itens_contagem", [linha["id"] for linha in plano.get("saem", [])]
+        )
+        _inserir_varias(
+            conn, "itens_contagem",
+            ("descricao", "secao", "ordem", "unidade_contagem", "insumo_id", "fator_conversao"),
+            novas,
+        )
+        _atualizar_linhas(
+            conn, "itens_contagem",
+            {"secao": "TEXT", "ordem": "INTEGER", "unidade_contagem": "TEXT",
+             "insumo_id": "INTEGER", "fator_conversao": "DOUBLE PRECISION"},
+            mudadas,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -727,6 +846,41 @@ def aplicar_plano(plano: dict) -> dict:
     return {
         "insumos_criados": len(plano["insumos_novos"]),
         "unidades_corrigidas": len(plano.get("unidades_a_corrigir", {})),
-        "itens_criados": criados,
-        "itens_atualizados": atualizados,
+        "itens_criados": len(novas),
+        "itens_atualizados": len(mudadas),
+        "itens_removidos": removidas,
     }
+
+
+# ---------- Contagem preenchida na planilha ----------
+
+def contagem_da_planilha(linhas: list[dict], itens: list[dict]) -> dict:
+    """Casa a coluna CONTAGEM da planilha com as linhas da contagem do sistema.
+
+    `linhas` vem de `ler_planilha` e `itens` de `crud.itens_da_contagem`.
+    Devolve:
+    - 'valores': {descrição do item no sistema: número contado};
+    - 'sem_linha': linhas com número que não têm linha no sistema (produto
+      novo na planilha: reimportar em Itens da Contagem antes);
+    - 'invalidas': linhas cuja contagem não é número.
+
+    Não grava nada: os números vão para a tabela da tela de contagem, e é
+    o botão de gravar dela, com todas as regras de sempre, que grava.
+    """
+    por_chave = {chave(item["descricao"]): item["descricao"] for item in itens}
+    valores, sem_linha, invalidas = {}, [], []
+    for linha in linhas:
+        if linha.get("contagem_invalida"):
+            invalidas.append(linha)
+            continue
+        if linha.get("contagem") is None:
+            continue
+        descricao = por_chave.get(chave(linha["descricao"]))
+        if descricao is None:
+            sem_linha.append(linha)
+            continue
+        if linha["contagem"] < 0:
+            invalidas.append({**linha, "contagem_invalida": f"{linha['contagem']:g}"})
+            continue
+        valores[descricao] = linha["contagem"]
+    return {"valores": valores, "sem_linha": sem_linha, "invalidas": invalidas}

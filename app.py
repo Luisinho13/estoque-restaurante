@@ -16,6 +16,7 @@ import database
 import auth
 import bar_import
 import contagem_import
+import cozinha_fria
 import crud
 import exemplos
 import ficha_import
@@ -38,8 +39,8 @@ st.set_page_config(
 # antes de gravar. Com crud antigo e tela nova, um lançamento gravaria pela
 # regra velha sem erro nenhum. Cada módulo guarda a data do arquivo que ele
 # carregou; se o arquivo no disco mudou desde então, o processo está velho.
-MODULOS_DO_APP = (database, auth, bar_import, contagem_import, crud, exemplos,
-                  ficha_import, nfe_import, zig_import)
+MODULOS_DO_APP = (database, auth, bar_import, contagem_import, cozinha_fria, crud,
+                  exemplos, ficha_import, nfe_import, zig_import)
 
 
 def _modulos_desatualizados():
@@ -74,6 +75,8 @@ try:
     # O spinner existe para a espera não ser uma tela em branco: acordar o
     # banco leva alguns segundos, e sem sinal nenhum parece travamento.
     with st.spinner("Conectando ao banco de dados…"):
+        # Desfaz o que a execução anterior deixou aberto (ver o docstring).
+        database.comecar_execucao()
         database.garantir_tabelas()  # uma vez por processo, não a cada clique
 except database.BancoIndisponivel:
     st.title("📦 Controle de Estoque")
@@ -1657,11 +1660,104 @@ def pagina_ficha_import():
         icon=":material/info:",
     )
 
-    aba_cozinha, aba_bar = st.tabs(["🍳 Cozinha", "🍸 Bar"])
+    aba_cozinha, aba_bar, aba_fria = st.tabs(["🍳 Cozinha", "🍸 Bar", "🥩 Cozinha fria"])
     with aba_cozinha:
         _importar_ficha_da_cozinha()
     with aba_bar:
         _importar_ficha_do_bar()
+    with aba_fria:
+        _separar_cozinha_fria()
+
+
+def _separar_cozinha_fria():
+    """Peça e porcionado viram itens separados (ver cozinha_fria.py)."""
+    st.caption(
+        "A carne limpa e porcionada na cozinha fria vira **produção**: a peça "
+        "comprada continua como insumo, o porcionado vira um item à parte, os "
+        "pratos passam a descontar o porcionado, e a peça sai quando o "
+        "porcionamento é lançado em *Lançar Produção* (1 receita = 1 kg de "
+        "peça). A perda da limpeza deixa de sumir na contagem."
+    )
+    recado = st.session_state.pop("fria_recado", None)
+    if recado:
+        st.success(recado, icon=":material/check_circle:")
+    try:
+        plano = cozinha_fria.montar_plano()
+    except Exception as e:
+        st.error(f"Não consegui montar a separação: {e}")
+        return
+
+    if plano["problemas"]:
+        st.error("Não dá para gravar ainda:\n\n- " + "\n- ".join(plano["problemas"]))
+        return
+    if not cozinha_fria.ha_o_que_fazer(plano):
+        st.success(
+            "A cozinha fria já está separada: "
+            + ", ".join(p["nome"] for p in plano["producoes"]) + ".",
+            icon=":material/done_all:",
+        )
+        return
+
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Produção": p["nome"],
+                "Consome (por receita)": f"1 kg de {p['peca']}",
+                "Situação": "já existe" if p["existe"] and p["tipo_atual"] == "producao"
+                else "vira produção" if p["existe"] else "nova",
+            }
+            for p in plano["producoes"]
+        ]),
+        hide_index=True, width="stretch",
+    )
+    st.warning(
+        "O rendimento começa em **1 kg por kg de peça**, a definir: ninguém "
+        "informou quanto cada limpeza rende. Na hora de lançar, a cozinha "
+        "corrige *Quanto rendeu* com o peso da balança; o número fixo pode ser "
+        "ajustado em Ficha Técnica → Produção.",
+        icon=":material/scale:",
+    )
+    trocas = plano["fichas_de_prato"] + plano["fichas_de_producao"]
+    if trocas:
+        with st.expander(f"Fichas que passam a descontar o porcionado ({len(trocas)})"):
+            st.dataframe(
+                pd.DataFrame([
+                    {"Prato ou receita": dono, "Antes": cru, "Depois": destino,
+                     "Quantidade": quantidade}
+                    for dono, cru, destino, quantidade in trocas
+                ]),
+                hide_index=True, width="stretch",
+            )
+    if plano["linhas_da_contagem"]:
+        with st.expander(
+            f"Linhas da contagem que vão para o porcionado ({len(plano['linhas_da_contagem'])})"
+        ):
+            st.dataframe(
+                pd.DataFrame([
+                    {"Linha": descricao, "Antes": de, "Depois": para}
+                    for descricao, de, para in plano["linhas_da_contagem"]
+                ]),
+                hide_index=True, width="stretch",
+            )
+    st.info(
+        "Depois disto, **todo porcionamento precisa ser lançado** em Lançar "
+        "Produção, como os molhos: sem ele, o porcionado vai para negativo "
+        "conforme os pratos saem, e a peça fica parada no estoque.",
+        icon=":material/soup_kitchen:",
+    )
+    if st.button("🥩 Separar a cozinha fria", type="primary", key="fria_aplicar"):
+        try:
+            feito = cozinha_fria.aplicar_plano(plano)
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        st.session_state["fria_recado"] = (
+            f"{feito['producoes_criadas']} produção(ões) criada(s), "
+            f"{feito['viraram_producao']} insumo(s) viraram produção, "
+            f"{feito['fichas_trocadas']} linha(s) de ficha trocada(s) e "
+            f"{feito['linhas_remapeadas']} linha(s) da contagem remapeada(s)."
+        )
+        st.rerun()
 
 
 def _importar_ficha_do_bar():
@@ -1961,9 +2057,11 @@ def pagina_nfe():
     )
 
     insumos = listar_insumos()
-    itens_sem_mapa = []
+    # Um SELECT para a nota inteira, em vez de um por item a cada clique.
+    mapas = crud.mapeamentos_nfe(dados["fornecedor_cnpj"])
+    itens_sem_mapa = [i for i in dados["itens"] if i["codigo_produto"] not in mapas]
     for item in dados["itens"]:
-        mapeamento = crud.buscar_mapeamento_nfe(dados["fornecedor_cnpj"], item["codigo_produto"])
+        mapeamento = mapas.get(item["codigo_produto"])
         if mapeamento:
             st.write(
                 f"✅ **{item['descricao']}** → já mapeado para "
@@ -1971,46 +2069,84 @@ def pagina_nfe():
                 f"({item['quantidade']} × fator {mapeamento['fator_conversao']} = "
                 f"{item['quantidade'] * mapeamento['fator_conversao']:.2f})"
             )
-        else:
-            itens_sem_mapa.append(item)
 
     if itens_sem_mapa:
         st.warning(f"{len(itens_sem_mapa)} item(ns) ainda não mapeado(s). Mapeie abaixo:")
         if not insumos:
             st.error("Cadastre ao menos um insumo antes de mapear produtos da nota.")
-        else:
-            for item in itens_sem_mapa:
-                with st.form(f"mapa_{item['codigo_produto']}"):
-                    st.write(
-                        f"**{item['descricao']}** "
-                        f"(código {item['codigo_produto']}, "
-                        f"{item['quantidade']} {item['unidade']} na nota)"
-                    )
-                    insumo_escolhido = st.selectbox(
-                        "Qual insumo isso representa?", insumos,
-                        key=f"sel_{item['codigo_produto']}",
-                    )
-                    fator = st.number_input(
-                        "Fator de conversão (nota → unidade do insumo). "
-                        "Deixe 1 se a unidade já bate.",
-                        min_value=0.0001, value=1.0, step=0.1,
-                        key=f"fator_{item['codigo_produto']}",
-                    )
-                    mapear = st.form_submit_button("Salvar mapeamento")
-
-                if mapear:
-                    crud.mapear_produto_nfe(
-                        dados["fornecedor_cnpj"], item["codigo_produto"],
-                        item["descricao"], insumo_escolhido, fator,
-                    )
-                    st.success(f"'{item['descricao']}' mapeado para '{insumo_escolhido}'!")
-                    st.rerun()
+            return
+        # Uma tabela e um botão para a nota toda. Antes era um formulário
+        # por item, e cada "Salvar" refazia a página inteira.
+        tabela = st.data_editor(
+            pd.DataFrame([
+                {
+                    "Código": i["codigo_produto"],
+                    "Produto na nota": i["descricao"],
+                    "Na nota": f"{i['quantidade']:g} {i['unidade']}",
+                    "Insumo": None,
+                    "Fator": 1.0,
+                }
+                for i in itens_sem_mapa
+            ]),
+            hide_index=True, width="stretch", key=f"nfe_mapa_{dados['numero_nota']}",
+            disabled=["Código", "Produto na nota", "Na nota"],
+            column_config={
+                "Insumo": st.column_config.SelectboxColumn(options=insumos),
+                "Fator": st.column_config.NumberColumn(
+                    min_value=0.0001, step=0.1,
+                    help="Nota → unidade do insumo. Deixe 1 se a unidade já bate "
+                         "(ex.: caixa com 12 e insumo em unidade = 12).",
+                ),
+            },
+        )
+        escolhidos = [
+            {
+                "codigo_produto": linha["Código"],
+                "descricao_produto": linha["Produto na nota"],
+                "insumo": linha["Insumo"],
+                "fator_conversao": 1.0 if pd.isna(linha["Fator"]) else float(linha["Fator"]),
+            }
+            for _, linha in tabela.iterrows()
+            if isinstance(linha["Insumo"], str) and linha["Insumo"]
+        ]
+        if st.button(f"Salvar mapeamentos ({len(escolhidos)})", disabled=not escolhidos,
+                     key="nfe_salvar_mapas"):
+            try:
+                salvos = crud.salvar_mapeamentos_nfe(dados["fornecedor_cnpj"], escolhidos)
+            except Exception as e:
+                st.error(f"Nada foi gravado: {e}")
+            else:
+                st.success(f"{salvos} produto(s) mapeado(s).")
+                st.rerun()
     else:
         st.success("Todos os itens da nota já estão mapeados!")
 
     st.divider()
-    if st.button("📥 Lançar compras desta nota no estoque", type="primary"):
-        lancados, nao_mapeados = nfe_import.processar_itens_nfe(dados, dados["fornecedor_cnpj"])
+    # A mesma proteção da nota manual: a nota lançada duas vezes dobra o
+    # estoque sem deixar rastro. Antes esta tela nem guardava o número.
+    duplicada = crud.nota_ja_lancada(dados["numero_nota"], dados["fornecedor_nome"])
+    confirmado = True
+    if duplicada:
+        st.warning(
+            f"A nota **{dados['numero_nota']}** já tem {duplicada['itens']} item(ns) "
+            f"lançado(s) em {_data_br(duplicada['data'])}. Lançar de novo vai somar "
+            "tudo outra vez no estoque. Para desfazer um lançamento, use a tela "
+            "*Compras Lançadas*.",
+            icon=":material/warning:",
+        )
+        confirmado = st.checkbox("Conferi, quero lançar mesmo assim", key="nfe_confirma")
+
+    # O teste de `confirmado` repete o disabled de propósito: o clique dado
+    # antes de a nota aparecer como lançada ainda chega nesta execução.
+    if st.button("📥 Lançar compras desta nota no estoque", type="primary",
+                 disabled=not confirmado) and confirmado:
+        try:
+            lancados, nao_mapeados = nfe_import.processar_itens_nfe(
+                dados, dados["fornecedor_cnpj"]
+            )
+        except Exception as e:
+            st.error(f"Nada foi lançado: {e}")
+            return
         if lancados:
             st.success(f"{len(lancados)} compra(s) lançada(s) no estoque!")
             for descricao, insumo_nome, qtd in lancados:
@@ -2020,7 +2156,7 @@ def pagina_nfe():
                 f"{len(nao_mapeados)} item(ns) ainda sem mapeamento não foram lançados. "
                 "Mapeie-os acima e clique de novo."
             )
-        st.session_state.pop("nfe_dados", None)
+        st.session_state.pop("nfe_confirma", None)
 
 
 # ---------- Lançar Nota Fiscal (manual) ----------
@@ -2462,27 +2598,28 @@ def _mapeamentos_salvos(pratos):
         )
 
         if st.button("Salvar alterações", key="zig_salvar_mapeamentos"):
-            alterados = 0
-            removidos = 0
+            mapear, remover = [], []
             for (_, linha_antes), (_, linha_depois) in zip(antes.iterrows(), depois.iterrows()):
                 escolha = linha_depois["Prato no sistema"]
                 if linha_depois["Remover"]:
-                    crud.remover_mapeamento_zig(linha_antes["SKU"])
-                    removidos += 1
+                    remover.append(linha_antes["SKU"])
                 elif escolha and escolha != linha_antes["Prato no sistema"]:
-                    crud.mapear_produto_zig(
-                        linha_antes["SKU"],
-                        linha_antes["Produto na Zig"],
-                        prato_nome=None if escolha == NAO_CONTROLAR else escolha,
-                        ignorar=escolha == NAO_CONTROLAR,
-                    )
-                    alterados += 1
+                    mapear.append({
+                        "sku": linha_antes["SKU"],
+                        "nome_produto": linha_antes["Produto na Zig"],
+                        "prato": None if escolha == NAO_CONTROLAR else escolha,
+                    })
 
-            if alterados or removidos:
-                st.success(f"{alterados} alterado(s), {removidos} removido(s).")
-                st.rerun()
-            else:
+            if not mapear and not remover:
                 st.info("Nada foi alterado.")
+            else:
+                try:
+                    feito = crud.salvar_mapeamentos_zig(mapear, remover)
+                except Exception as e:
+                    st.error(f"Nada foi gravado: {e}")
+                else:
+                    st.success(f"{feito['salvos']} alterado(s), {feito['removidos']} removido(s).")
+                    st.rerun()
 
 
 def pagina_zig():
@@ -2597,23 +2734,26 @@ def pagina_zig():
             )
 
             if st.button("Salvar mapeamentos", type="primary"):
-                salvos = 0
-                for _, linha in editado.iterrows():
-                    escolha = linha["Prato no sistema"]
-                    if not escolha:
-                        continue
-                    crud.mapear_produto_zig(
-                        linha["SKU"],
-                        linha["Produto na Zig"],
-                        prato_nome=None if escolha == NAO_CONTROLAR else escolha,
-                        ignorar=escolha == NAO_CONTROLAR,
-                    )
-                    salvos += 1
-                if salvos:
-                    st.success(f"{salvos} produto(s) mapeado(s)!")
-                    st.rerun()
-                else:
+                mapear = [
+                    {
+                        "sku": linha["SKU"],
+                        "nome_produto": linha["Produto na Zig"],
+                        "prato": None if linha["Prato no sistema"] == NAO_CONTROLAR
+                        else linha["Prato no sistema"],
+                    }
+                    for _, linha in editado.iterrows()
+                    if linha["Prato no sistema"]
+                ]
+                if not mapear:
                     st.info("Nenhum produto foi escolhido ainda.")
+                else:
+                    try:
+                        feito = crud.salvar_mapeamentos_zig(mapear)
+                    except Exception as e:
+                        st.error(f"Nada foi gravado: {e}")
+                    else:
+                        st.success(f"{feito['salvos']} produto(s) mapeado(s)!")
+                        st.rerun()
 
     if reconhecidos:
         with st.expander(f"✅ {len(reconhecidos)} lançamento(s) já reconhecido(s)"):
@@ -2747,6 +2887,27 @@ def _importar_planilha_de_contagem():
             ),
             icon=":material/straighten:",
         )
+    if plano["saem"]:
+        with st.expander(f"Linhas que saem da contagem ({len(plano['saem'])})"):
+            st.caption(
+                "Estão no sistema e não estão mais nesta planilha (produto que saiu "
+                "ou descrição reescrita). Sai só a linha da contagem: o insumo "
+                "continua cadastrado, com compras e ficha."
+            )
+            st.write(", ".join(f"{s['descricao']} → {s['insumo']}" for s in plano["saem"]))
+    if plano["ficam"]:
+        st.info(
+            f"{len(plano['ficam'])} linha(s) não estão mais na planilha, mas já têm "
+            "contagem gravada e por isso ficam: "
+            + ", ".join(f["descricao"] for f in plano["ficam"]),
+            icon=":material/history:",
+        )
+    if plano["insumos_sem_linha"]:
+        st.caption(
+            "Estes insumos ficam sem nenhuma linha na planilha e passam para a "
+            "seção *Fora da planilha* da contagem. Se não existem mais, dá para "
+            "excluir na tela de Insumos: " + ", ".join(plano["insumos_sem_linha"])
+        )
     if plano["insumos_novos"]:
         with st.expander(f"Insumos que serão criados ({len(plano['insumos_novos'])})"):
             st.write(", ".join(
@@ -2773,8 +2934,9 @@ def _importar_planilha_de_contagem():
         st.success(
             f"{resultado['insumos_criados']} insumo(s) criado(s), "
             f"{resultado['unidades_corrigidas']} unidade(s) trocada(s), "
-            f"{resultado['itens_criados']} linha(s) nova(s) e "
-            f"{resultado['itens_atualizados']} atualizada(s).",
+            f"{resultado['itens_criados']} linha(s) nova(s), "
+            f"{resultado['itens_atualizados']} atualizada(s) e "
+            f"{resultado['itens_removidos']} removida(s).",
             icon=":material/check_circle:",
         )
 
@@ -2936,7 +3098,80 @@ def pagina_contagem():
         )
         _apagar_contagem(data_iso, chave)
 
+    if itens:
+        _contagem_pela_planilha(data_iso, itens, chave)
     _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teoricos, chave)
+
+
+def _contagem_pela_planilha(data_iso, itens, chave):
+    """Traz para a tabela os números da coluna CONTAGEM da planilha.
+
+    A equipe conta no papel ou na própria planilha; digitar tudo de novo
+    no app eram quase quatrocentos números. Aqui os números só entram na
+    tabela, no lugar do que estava nela, e quem conta confere e grava pelo
+    botão de sempre, com as mesmas regras (linha irmã em branco vale zero,
+    linha sem fator trava o insumo).
+    """
+    avisado = st.session_state.pop(f"{chave}_da_planilha", None)
+    if avisado:
+        st.success(avisado, icon=":material/table_view:")
+    with st.expander("📄 Preencher com a planilha da contagem"):
+        st.caption(
+            f"Envie a planilha com a coluna CONTAGEM preenchida. Os números "
+            f"entram na tabela abaixo, para {_data_br(data_iso)}, e só são "
+            "gravados quando você apertar **Gravar contagem**."
+        )
+        arquivo = st.file_uploader(
+            "Planilha preenchida (.xlsx, aba COMPRAS)", type=["xlsx"],
+            key=f"{chave}_arquivo",
+        )
+        if not arquivo:
+            return
+        try:
+            lido = contagem_import.contagem_da_planilha(
+                contagem_import.ler_planilha(arquivo), itens
+            )
+        except Exception as e:
+            st.error(f"Não consegui ler a planilha: {e}")
+            return
+
+        valores = lido["valores"]
+        st.write(f"**{len(valores)} linha(s) com número** batem com a contagem do sistema.")
+        if lido["invalidas"]:
+            st.error(
+                "Estas linhas têm na contagem algo que não é número, e ficam de fora: "
+                + "; ".join(f"{l['descricao']} ({l['contagem_invalida']})"
+                            for l in lido["invalidas"]),
+                icon=":material/error:",
+            )
+        if lido["sem_linha"]:
+            st.warning(
+                f"{len(lido['sem_linha'])} linha(s) com número não existem na contagem "
+                "do sistema e ficam de fora. Se são produtos novos, importe esta "
+                "planilha em *Itens da Contagem* antes: "
+                + "; ".join(f"{l['descricao']} ({l['contagem']:g})" for l in lido["sem_linha"]),
+                icon=":material/warning:",
+            )
+        if not valores:
+            return
+        if st.button("Colocar os números na tabela", type="primary", key=f"{chave}_usar_planilha"):
+            # As linhas da planilha são trocadas pelo que veio do arquivo;
+            # o que foi digitado em "Fora da planilha" fica.
+            da_planilha = {item["descricao"] for item in itens}
+            atuais = st.session_state.get(f"{chave}_valores", {})
+            st.session_state[f"{chave}_valores"] = {
+                **{n: v for n, v in atuais.items() if n not in da_planilha},
+                **valores,
+            }
+            # O editor guarda as edições por índice de linha; sem limpar,
+            # uma edição antiga seria reaplicada por cima do arquivo.
+            for nome in list(st.session_state):
+                if nome.startswith(f"{chave}_editor_"):
+                    del st.session_state[nome]
+            st.session_state[f"{chave}_da_planilha"] = (
+                f"{len(valores)} número(s) da planilha na tabela. Confira e grave."
+            )
+            st.rerun()
 
 
 def _esquecer_contagem(chave):
@@ -3312,6 +3547,12 @@ def pagina_producao():
     item = por_nome[producao]
     unidade = item["unidade_medida"]
 
+    if producao in cozinha_fria.PORCIONADOS.values():
+        st.caption(
+            "Porcionamento: **1 receita = 1 kg de peça**. Em *Quantas receitas*, "
+            "os kg de peça que foram limpos; em *Quanto rendeu*, o peso do "
+            "porcionado pronto. A diferença é a perda da limpeza."
+        )
     col1, col2 = st.columns(2)
     receitas = col1.number_input(
         "Quantas receitas", min_value=0.0, value=1.0, step=0.5, format="%.2f",
@@ -3454,6 +3695,208 @@ def _historico_de_producao():
                 st.session_state["producao_recado"] = f"Leva apagada: {escolhida}."
                 st.rerun()
 
+# ---------- Baixa de Estoque ----------
+
+def pagina_baixa():
+    st.title("🗑️ Baixa de Estoque")
+    st.caption(
+        "Para o que sai do estoque sem ser venda nem produção: a garrafa que "
+        "quebrou, o peixe que venceu, a refeição da equipe. Sem a baixa, isso "
+        "só aparece como perda na contagem seguinte, sem explicação."
+    )
+    recado = st.session_state.pop("baixa_gravada", None)
+    if recado:
+        st.success(recado, icon=":material/check_circle:")
+
+    insumos = listar_insumos()
+    if not insumos:
+        st.info("Cadastre um insumo antes de dar baixa.")
+        return
+    unidades = unidades_dos_insumos()
+
+    col1, col2 = st.columns([1, 2])
+    data = col1.date_input("Data", value=crud.hoje(), key="baixa_data")
+    motivo = col2.selectbox("Motivo", crud.MOTIVOS_DE_BAIXA, key="baixa_motivo")
+    observacao = st.text_input("Observação (opcional)", key="baixa_obs",
+                               placeholder="ex.: caixa caiu no descarregamento")
+
+    st.write("**O que saiu**")
+    st.caption("Uma linha por insumo, na unidade em que ele é controlado.")
+    # A versão entra na chave para a tabela voltar vazia depois de gravar.
+    versao = st.session_state.get("baixa_versao", 0)
+    tabela = st.data_editor(
+        pd.DataFrame({
+            "Insumo": pd.Series([], dtype="object"),
+            "Quantidade": pd.Series([], dtype="float64"),
+        }),
+        num_rows="dynamic", width="stretch", hide_index=True,
+        key=f"baixa_itens_{versao}",
+        column_config={
+            "Insumo": st.column_config.SelectboxColumn(
+                "Insumo", options=insumos, required=False, width="large"
+            ),
+            "Quantidade": st.column_config.NumberColumn(
+                "Quantidade", min_value=0.0, step=0.5, format="%.3f"
+            ),
+        },
+    )
+    itens = _itens_digitados(tabela)
+    if not itens:
+        st.info("Preencha ao menos um item.")
+        return
+
+    estoques = {e["insumo"]: e["estoque_atual"] for e in crud.calcular_estoque_todos_insumos()}
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Insumo": i["insumo"],
+                "Sai": i["quantidade"],
+                "Un.": unidades.get(i["insumo"], ""),
+                "Estoque agora": estoques.get(i["insumo"]),
+                "Fica": (estoques.get(i["insumo"]) or 0) - i["quantidade"],
+            }
+            for i in itens
+        ]),
+        width="stretch", hide_index=True,
+        column_config={c: st.column_config.NumberColumn(format="%.3f")
+                       for c in ("Sai", "Estoque agora", "Fica")},
+    )
+    if st.button(f"Dar baixa em {len(itens)} item(ns)", type="primary"):
+        try:
+            gravados = crud.registrar_baixas_em_lote(
+                itens, str(data), motivo, observacao.strip() or None
+            )
+        except Exception as e:
+            st.error(f"Nada foi gravado: {e}")
+            return
+        st.session_state["baixa_versao"] = versao + 1
+        st.session_state["baixa_gravada"] = (
+            f"Baixa de {gravados} item(ns) em {_data_br(str(data))} ({motivo}). "
+            "Para desfazer, use *Corrigir Lançamentos*."
+        )
+        st.rerun()
+
+
+# ---------- Corrigir Lançamentos ----------
+
+def _escolher_para_apagar(linhas, colunas, chave, apagar, rotulo):
+    """Tabela com uma caixa "Apagar" por linha, confirmação e botão.
+
+    `linhas` precisa ter 'id'; `colunas` é {coluna na tela: chave na linha};
+    `apagar` recebe a lista de ids e devolve quantos apagou.
+    """
+    if not linhas:
+        st.caption(f"Nenhum(a) {rotulo} no período.")
+        return
+    versao = st.session_state.get(f"{chave}_versao", 0)
+    df = pd.DataFrame([
+        {"Apagar": False, **{coluna: l[campo] for coluna, campo in colunas.items()}}
+        for l in linhas
+    ])
+    tabela = st.data_editor(
+        df, hide_index=True, width="stretch", key=f"{chave}_tabela_{versao}",
+        disabled=[c for c in df.columns if c != "Apagar"],
+        column_config={
+            "Apagar": st.column_config.CheckboxColumn(width="small"),
+            "Quantidade": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+    ids = [linhas[i]["id"] for i, marcada in enumerate(tabela["Apagar"]) if marcada]
+    if not ids:
+        st.caption("Marque na coluna *Apagar* o que foi lançado errado.")
+        return
+    certeza = st.checkbox(
+        f"Sim, apagar {len(ids)} lançamento(s). Não tem como desfazer.",
+        key=f"{chave}_certeza_{versao}",
+    )
+    if st.button("🗑️ Apagar", type="primary", disabled=not certeza,
+                 key=f"{chave}_apagar_{versao}") and certeza:
+        try:
+            apagados = apagar(ids)
+        except Exception as e:
+            st.error(f"Nada foi apagado: {e}")
+            return
+        st.session_state[f"{chave}_versao"] = versao + 1
+        st.session_state["corrigir_recado"] = f"{apagados} lançamento(s) apagado(s)."
+        st.rerun()
+
+
+def _marcar_repetidas(compras):
+    """Mesmo dia, insumo, quantidade, fornecedor e nota: quase sempre é o
+    mesmo lançamento feito duas vezes."""
+    def assinatura(c):
+        return (c["data"], c["insumo"], c["quantidade"], c["fornecedor"], c["numero_nota"])
+
+    vezes = {}
+    for c in compras:
+        vezes[assinatura(c)] = vezes.get(assinatura(c), 0) + 1
+    for c in compras:
+        c["repetida"] = "⚠️ em dobro?" if vezes[assinatura(c)] > 1 else ""
+    return sum(1 for c in compras if c["repetida"])
+
+
+def pagina_corrigir():
+    st.title("🧹 Corrigir Lançamentos")
+    st.caption(
+        "Para apagar o que foi lançado em dobro ou errado. Apagar uma compra "
+        "tira do estoque o que ela tinha somado; apagar uma produção ou uma "
+        "baixa devolve o que ela tinha tirado. A venda se corrige na própria "
+        "tela de venda, lançando o número certo do dia."
+    )
+    recado = st.session_state.pop("corrigir_recado", None)
+    if recado:
+        st.success(recado, icon=":material/delete:")
+
+    hoje = crud.hoje()
+    col1, col2 = st.columns(2)
+    inicio = col1.date_input("De", value=hoje - datetime.timedelta(days=30), key="corrigir_de")
+    fim = col2.date_input("Até", value=hoje, key="corrigir_ate")
+    if inicio > fim:
+        st.error("A data inicial é depois da final.")
+        return
+
+    aba_compras, aba_producoes, aba_baixas = st.tabs(["Compras", "Produções", "Baixas"])
+    with aba_compras:
+        compras = crud.compras_no_periodo(str(inicio), str(fim))
+        repetidas = _marcar_repetidas(compras)
+        if repetidas:
+            st.warning(
+                f"{repetidas} compra(s) aparecem repetidas: mesmo dia, insumo, "
+                "quantidade, fornecedor e nota. Confira e apague a sobra.",
+                icon=":material/content_copy:",
+            )
+        for c in compras:
+            c["data_br"] = _data_br(c["data"])
+        _escolher_para_apagar(
+            compras,
+            {"Data": "data_br", "Insumo": "insumo", "Quantidade": "quantidade",
+             "Un.": "unidade_medida", "Fornecedor": "fornecedor", "Nota": "numero_nota",
+             "Repetida": "repetida", "Observação": "observacao"},
+            "corrigir_compras", crud.apagar_compras, "compra",
+        )
+    with aba_producoes:
+        levas = crud.producoes_no_periodo(str(inicio), str(fim))
+        for l in levas:
+            l["data_br"] = _data_br(l["data"])
+        _escolher_para_apagar(
+            levas,
+            {"Data": "data_br", "Produção": "producao", "Receitas": "receitas",
+             "Quantidade": "quantidade_produzida", "Un.": "unidade_medida",
+             "Observação": "observacao"},
+            "corrigir_producoes", crud.apagar_producoes, "produção",
+        )
+    with aba_baixas:
+        baixas = crud.baixas_no_periodo(str(inicio), str(fim))
+        for b in baixas:
+            b["data_br"] = _data_br(b["data"])
+        _escolher_para_apagar(
+            baixas,
+            {"Data": "data_br", "Insumo": "insumo", "Quantidade": "quantidade",
+             "Un.": "unidade_medida", "Motivo": "motivo", "Observação": "observacao"},
+            "corrigir_baixas", crud.apagar_baixas, "baixa",
+        )
+
+
 # ---------- Navegação ----------
 
 PG_DASHBOARD = st.Page(
@@ -3496,6 +3939,14 @@ PG_VENDA = st.Page(
 PG_PRODUCAO = st.Page(
     pagina_producao, title="Lançar Produção", icon=":material/soup_kitchen:",
     url_path="producao",
+)
+PG_BAIXA = st.Page(
+    pagina_baixa, title="Baixa de Estoque", icon=":material/remove_shopping_cart:",
+    url_path="baixa",
+)
+PG_CORRIGIR = st.Page(
+    pagina_corrigir, title="Corrigir Lançamentos", icon=":material/delete_sweep:",
+    url_path="corrigir",
 )
 PG_ZIG = st.Page(
     pagina_zig, title="Importar Vendas (PDV)", icon=":material/receipt:", url_path="vendas-pdv"
@@ -3542,7 +3993,9 @@ PAGINAS_POR_AREA = {
     "zig": PG_ZIG,
     "venda": PG_VENDA,
     "producao": PG_PRODUCAO,
+    "baixa": PG_BAIXA,
     "contagem": PG_CONTAGEM,
+    "corrigir": PG_CORRIGIR,
     "perdas": PG_PERDAS,
 }
 
@@ -3557,7 +4010,8 @@ if _liberadas("dashboard", "painel", "saida", "perdas"):
 CADASTROS = ("insumos", "pratos", "ficha", "ficha_import", "itens_contagem")
 if _liberadas(*CADASTROS):
     menu["Cadastros"] = _liberadas(*CADASTROS)
-LANCAMENTOS = ("compra", "nf_manual", "nfe", "zig", "venda", "producao", "contagem")
+LANCAMENTOS = ("compra", "nf_manual", "nfe", "zig", "venda", "producao", "baixa",
+               "contagem", "corrigir")
 if _liberadas(*LANCAMENTOS):
     menu["Lançamentos"] = _liberadas(*LANCAMENTOS)
 
@@ -3624,4 +4078,34 @@ if st.session_state.pop("_sem_areas", False):
         "para você ainda. Peça ao administrador."
     )
 
-navegacao.run()
+
+def _operacao_interrompida():
+    """A conexão caiu ou uma consulta passou do tempo no meio da tela.
+
+    Antes, isso era uma tela carregando sem fim (relato de 30/09/2026):
+    agora a conexão tem limite de tempo, e o erro chega aqui. As gravações
+    são tudo ou nada, então o que estava sendo gravado não ficou pela
+    metade — ou foi inteiro, ou não foi.
+    """
+    database.descartar_conexao()
+    st.error(
+        "**A conexão com o banco caiu no meio da operação.** Nada fica gravado "
+        "pela metade: o que estava sendo salvo ou foi inteiro, ou não foi. "
+        "Tente de novo; se era uma gravação, confira o resultado depois.",
+        icon=":material/cloud_off:",
+    )
+    if st.button("Tentar de novo", type="primary", icon=":material/refresh:",
+                 key="tentar_de_novo_conexao"):
+        st.rerun()
+
+
+try:
+    navegacao.run()
+except database.BancoIndisponivel:
+    _operacao_interrompida()
+except Exception as erro:
+    # OperationalError inclui a queda da conexão e o comando que passou do
+    # tempo. Qualquer outro erro é defeito e continua aparecendo como tal.
+    if not database.erro_de_conexao(erro):
+        raise
+    _operacao_interrompida()

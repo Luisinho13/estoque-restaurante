@@ -70,26 +70,28 @@ def processar_itens_nfe(dados: dict, fornecedor_cnpj: str) -> tuple:
     """
     Lança as compras dos itens que já têm mapeamento e retorna
     (lancados, nao_mapeados) para quem chamou decidir o que exibir.
+
+    Os itens mapeados entram todos juntos, tudo ou nada, com o número da
+    nota — é ele que deixa o sistema avisar se a mesma nota for lançada de
+    novo. Antes cada item era gravado sozinho e sem o número.
     """
-    lancados = []
-    nao_mapeados = []
-
+    mapas = crud.mapeamentos_nfe(fornecedor_cnpj)
+    lancados, nao_mapeados, compras = [], [], []
     for item in dados["itens"]:
-        mapeamento = crud.buscar_mapeamento_nfe(fornecedor_cnpj, item["codigo_produto"])
-
-        if mapeamento:
-            quantidade_convertida = item["quantidade"] * mapeamento["fator_conversao"]
-            crud.registrar_compra(
-                insumo_nome=mapeamento["insumo_nome"],
-                quantidade=quantidade_convertida,
-                data=dados["data_emissao"],
-                fornecedor=dados["fornecedor_nome"],
-                observacao=f"Importado da NF-e nº {dados['numero_nota']}",
-            )
-            lancados.append((item["descricao"], mapeamento["insumo_nome"], quantidade_convertida))
-        else:
+        mapeamento = mapas.get(item["codigo_produto"])
+        if not mapeamento:
             nao_mapeados.append(item)
+            continue
+        quantidade = item["quantidade"] * mapeamento["fator_conversao"]
+        compras.append({"insumo": mapeamento["insumo_nome"], "quantidade": quantidade})
+        lancados.append((item["descricao"], mapeamento["insumo_nome"], quantidade))
 
+    if compras:
+        crud.registrar_compras_em_lote(
+            compras, dados["data_emissao"], fornecedor=dados["fornecedor_nome"],
+            numero_nota=dados["numero_nota"],
+            observacao=f"Importado da NF-e nº {dados['numero_nota']}",
+        )
     return lancados, nao_mapeados
 
 

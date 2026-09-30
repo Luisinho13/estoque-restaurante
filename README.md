@@ -117,7 +117,10 @@ não olhar.
 - Importação por **XML de NF-e**: cada produto do fornecedor é mapeado
   uma vez para um insumo, com fator de conversão quando a unidade da
   nota não bate com a unidade controlada (caixa → unidade, por exemplo).
-  Nas próximas notas do mesmo fornecedor, o produto é reconhecido sozinho
+  Nas próximas notas do mesmo fornecedor, o produto é reconhecido sozinho.
+  Os produtos novos da nota são mapeados todos numa tabela só, e a nota
+  entra inteira, com o número dela — importar a mesma nota de novo pede
+  confirmação
 
 **Produção**
 - **Lançar Produção**: o molho, a base ou a carne porcionada que a cozinha
@@ -127,6 +130,24 @@ não olhar.
   ser corrigido, porque na planilha da cozinha ele está errado em vários
   molhos. A segunda leva do mesmo item no mesmo dia pede confirmação, e
   uma leva lançada errado pode ser apagada, devolvendo os ingredientes
+- **Cozinha fria**: a carne limpa e porcionada na cozinha é produção. A
+  peça comprada (o filé mignon inteiro, o salmão de 3 kg) é um item; o
+  porcionado é outro, e é ele que os pratos descontam. O porcionamento se
+  lança como qualquer produção — quantos kg de peça foram limpos e quanto
+  ficou pronto — e a diferença, a perda da limpeza, passa a ter nome e
+  data em vez de sumir na contagem. Separado num clique, com prévia, a
+  partir das linhas da planilha de contagem
+
+**Correções e baixas**
+- **Baixa de Estoque**: o que sai sem ser venda nem produção — a garrafa
+  que quebrou, o peixe que venceu, a refeição da equipe —, com motivo.
+  Sem a baixa, essa saída só aparecia como perda na contagem seguinte,
+  sem explicação
+- **Corrigir Lançamentos**: compras, produções e baixas de um período,
+  com uma caixa para marcar o que foi lançado errado e apagar, com
+  confirmação. A compra que aparece repetida (mesmo dia, insumo,
+  quantidade, fornecedor e nota) vem marcada como possível lançamento em
+  dobro
 
 **Cadastros**
 - Insumo e prato um a um, pelo formulário. Cada insumo é **cru**
@@ -194,10 +215,15 @@ não olhar.
   de cada insumo ao lado do estoque teórico; ao gravar, quais divergiram e
   em quanto. Regravar corrige o dia em vez de empilhar contagens, e a
   contagem de um dia pode ser apagada inteira, com confirmação — os
-  insumos voltam a partir da contagem anterior
+  insumos voltam a partir da contagem anterior.
+  A equipe que conta direto na planilha **envia a planilha preenchida** e
+  os números entram na tabela, para conferir e gravar com as mesmas regras
 - **Itens da Contagem**: importa a planilha de contagem (só alimentos e
   bebidas — limpeza, descartáveis, escritório e utensílios ficam de fora)
-  e é onde se preenche o fator das linhas cujo peso a planilha não diz
+  e é onde se preenche o fator das linhas cujo peso a planilha não diz.
+  Reimportar uma versão nova da planilha tira da contagem as linhas que
+  saíram dela, e as colunas são achadas pelo cabeçalho, onde quer que
+  estejam
 - **Estoque mínimo em lote**, na tela de Insumos: é o mínimo que liga o
   semáforo do painel e o alerta de reposição. Definido um a um, em mais de
   cem insumos, não é definido nunca — e sem ele o sistema só conta o
@@ -611,6 +637,48 @@ que refaz só ela, sem ir ao banco até o botão de gravar.
 A lição é a mesma da conexão por clique: em banco remoto, o que custa é
 quantas vezes se pergunta, não o tamanho da pergunta.
 
+### A tela que ficava carregando
+
+No terceiro dia de uso, o app "caiu no meio de um processo": a tela ficou
+carregando, sem erro e sem fim.
+
+Havia duas causas possíveis no código, e as duas eram silenciosas. A
+primeira: a conexão com o banco não tinha limite de tempo. Se ela morria
+no caminho — o Wi-Fi do restaurante, o Neon trocando de máquina —, a
+consulta seguinte esperava uma resposta que nunca vinha, até o sistema
+operacional desistir, o que no servidor passa de quinze minutos. E uma
+gravação que esbarrasse na trava de outra esperava para sempre.
+
+A segunda era pior. A conexão é guardada por aba, para não ser reaberta a
+cada clique. Mas um comando que dá erro deixa a conexão recusando tudo
+até alguém desfazer a transação — e várias gravações não desfaziam. Um
+erro qualquer travava todos os cliques seguintes daquela aba, até ela
+ficar um minuto parada.
+
+Agora a conexão tem limite: ela é sondada a cada poucos segundos e dada
+por morta em cerca de 25; um comando pode rodar até 60 segundos e esperar
+uma trava por 15. Cada clique começa desfazendo o que o anterior deixou
+aberto, e a conexão que morre antes de qualquer escrita é reaberta e o
+comando refeito, sem ninguém perceber. Quando não dá para refazer — a
+conexão caiu no meio de uma gravação —, a tela diz isso e oferece tentar
+de novo, e a gravação, que é tudo ou nada, não fica pela metade. Os cinco
+casos foram provocados de propósito num Postgres local, derrubando a
+conexão pelo servidor no meio do trabalho.
+
+A lição: esperar sem prazo é um defeito, mesmo quando nada está errado.
+Um erro em dez segundos é melhor que uma tela girando para sempre.
+
+### A nota que entrava duas vezes
+
+A importação de NF-e lançava cada item sozinho e não guardava o número da
+nota. Depois de lançar, o arquivo continuava na tela, e o botão também:
+um segundo clique somava a nota inteira outra vez, sem aviso, e a compra
+não tinha como ser apagada.
+
+Agora a nota entra inteira, com o número, e a segunda vez pede
+confirmação — a mesma trava que a nota digitada à mão já tinha. E toda
+compra, produção e baixa pode ser apagada em *Corrigir Lançamentos*.
+
 ### O fio que liga todos
 
 Nenhum desses problemas deu mensagem de erro. O estoque errado, o
@@ -759,6 +827,7 @@ estoque-restaurante/
 ├── ficha_import.py   # leitura das planilhas de ficha técnica → cadastros
 ├── bar_import.py     # leitura da planilha do bar → drinks e preparos
 ├── contagem_import.py # leitura da planilha de contagem → itens da contagem
+├── cozinha_fria.py   # peça e porcionado da carne como itens separados
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
@@ -773,6 +842,29 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.13 — Correções, baixas e cozinha fria
+
+- **Conexão com prazo.** A tela que ficava carregando para sempre agora
+  recebe um erro em segundos, com um botão de tentar de novo; a conexão
+  que morre antes de qualquer escrita é reaberta sozinha, e um erro numa
+  gravação não trava mais os cliques seguintes da aba
+- **Corrigir Lançamentos**: apagar compra, produção ou baixa lançada
+  errado, com a compra repetida marcada
+- **Baixa de Estoque**, com motivo: quebra, vencido, consumo da equipe
+- **NF-e sem nota em dobro**: a nota importada guarda o número e avisa se
+  já foi lançada; os produtos novos se mapeiam numa tabela só
+- **Contagem pela planilha preenchida**: a equipe envia a planilha com a
+  coluna CONTAGEM e os números entram na tabela da tela. A planilha nova
+  da equipe (com três colunas a mais à esquerda) é lida pelo cabeçalho, e
+  reimportar os itens tira da contagem as linhas que saíram dela
+- **Cozinha fria**: alcatra, mignon, chorizo, costela, barriga, frango,
+  camarão sete barbas e salmão viram peça (comprada) e porcionado
+  (produção); os pratos descontam o porcionado. O rendimento começa em
+  1 kg por kg de peça, a definir pela cozinha
+- **Gravações em lote** nos mapeamentos da Zig e da NF-e, na importação
+  da ficha técnica e na dos itens da contagem: de centenas de idas ao
+  banco para poucas, com o resultado conferido igual ao da versão antiga
 
 ### v0.12 — O bar entra no estoque
 

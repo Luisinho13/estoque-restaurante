@@ -560,6 +560,9 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
     sistema (que é o nome da Zig, e é por ele que a venda encontra o prato).
     Aba sem correspondência vira prato novo com o nome da própria ficha.
     """
+    # Aqui dentro para não virar importação circular: cozinha_fria usa `chave`.
+    from cozinha_fria import PORCIONADOS
+
     de_para_pratos = de_para_pratos or {}
     avisos = []
 
@@ -693,6 +696,14 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
                 f"'{item['nome']}' foi lançado como '{insumo}' — "
                 f"{MAPEAMENTOS_ASSUMIDOS[nome]}."
             )
+        # Carne da cozinha fria (cozinha_fria.py): depois que a peça e o
+        # porcionado viraram itens separados, o prato consome o porcionado.
+        # Sem isto, reimportar a planilha voltaria a ficha para a peça.
+        porcionado = PORCIONADOS.get(insumo)
+        if porcionado and tipo_atual.get(porcionado) == "producao":
+            insumos[porcionado] = unidade_atual[porcionado]
+            tipos[porcionado] = "producao"
+            return porcionado
         if tipos.get(insumo) == "producao":
             return insumo
 
@@ -872,18 +883,22 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
     O plano pode trazer `setor` ('cozinha' ou 'bar', ver bar_import.py):
     os pratos e as produções dele ficam marcados com esse setor.
     """
+    # Em lotes (crud._inserir_varias e cia.): linha a linha eram umas
+    # trezentas idas ao banco na planilha do bar, cada uma cruzando dos EUA
+    # até São Paulo. O resultado é o mesmo da versão linha a linha.
     setor = plano.get("setor", "cozinha")
     conn = get_connection()
     try:
         rendimento = {p["nome"]: p["rendimento"] for p in plano["producoes"]}
+        novos = []
         for nome in plano["insumos_novos"]:
             tipo = plano["tipos"].get(nome, "cru")
-            conn.execute(
-                """INSERT INTO insumos (nome, unidade_medida, estoque_minimo, tipo, rendimento, setor)
-                   VALUES (?, ?, 0, ?, ?, ?)""",
-                (nome, plano["insumos"][nome], tipo, rendimento.get(nome),
-                 setor if tipo == "producao" else "cozinha"),
-            )
+            novos.append((nome, plano["insumos"][nome], 0, tipo, rendimento.get(nome),
+                          setor if tipo == "producao" else "cozinha"))
+        crud._inserir_varias(
+            conn, "insumos",
+            ("nome", "unidade_medida", "estoque_minimo", "tipo", "rendimento", "setor"), novos,
+        )
 
         if corrigir_unidades:
             for divergencia in plano.get("unidades_divergentes", []):
@@ -892,17 +907,9 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
                     (divergencia["planilha"], divergencia["insumo"]),
                 )
 
-        for producao in plano["producoes"]:
-            conn.execute(
-                "UPDATE insumos SET tipo = 'producao', rendimento = ?, setor = ? WHERE nome = ?",
-                (producao["rendimento"], setor, producao["nome"]),
-            )
-
-        for nome in plano["pratos_novos"]:
-            conn.execute("INSERT INTO pratos (nome, setor) VALUES (?, ?)", (nome, setor))
-        for nome in plano["pratos"]:
-            conn.execute("UPDATE pratos SET setor = ? WHERE nome = ?", (setor, nome))
-
+        crud._inserir_varias(
+            conn, "pratos", ("nome", "setor"), [(nome, setor) for nome in plano["pratos_novos"]]
+        )
         ids_insumo = {
             d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM insumos").fetchall()
         }
@@ -910,33 +917,55 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
             d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM pratos").fetchall()
         }
 
-        if substituir_fichas:
-            for prato in sorted({f["prato"] for f in plano["fichas"]}):
-                conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (ids_prato[prato],))
-            for producao in plano["producoes"]:
-                conn.execute("DELETE FROM ficha_producao WHERE producao_id = ?",
-                             (ids_insumo[producao["nome"]],))
+        crud._atualizar_linhas(
+            conn, "insumos",
+            {"tipo": "TEXT", "rendimento": "DOUBLE PRECISION", "setor": "TEXT"},
+            {ids_insumo[p["nome"]]: ("producao", p["rendimento"], setor)
+             for p in plano["producoes"] if p["nome"] in ids_insumo},
+        )
+        crud._atualizar_linhas(
+            conn, "pratos", {"setor": "TEXT"},
+            {ids_prato[nome]: (setor,) for nome in plano["pratos"] if nome in ids_prato},
+        )
 
-        for ficha in plano["fichas"]:
-            conn.execute(
-                """INSERT INTO ficha_tecnica (prato_id, insumo_id, quantidade_por_prato)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(prato_id, insumo_id)
-                   DO UPDATE SET quantidade_por_prato = excluded.quantidade_por_prato""",
-                (ids_prato[ficha["prato"]], ids_insumo[ficha["insumo"]], ficha["quantidade"]),
-            )
+        if substituir_fichas:
+            pratos = sorted({ids_prato[f["prato"]] for f in plano["fichas"]})
+            producoes = sorted({ids_insumo[p["nome"]] for p in plano["producoes"]})
+            for tabela, coluna, ids in (("ficha_tecnica", "prato_id", pratos),
+                                        ("ficha_producao", "producao_id", producoes)):
+                for lote in crud._em_lotes(ids):
+                    conn.execute(
+                        f"DELETE FROM {tabela} WHERE {coluna} IN ({crud._marcadores(len(lote))})",
+                        lote,
+                    )
+
+        # O mesmo par repetido na planilha valia o último (era um upsert por
+        # linha). O dicionário mantém isso, e o Postgres não aceita o mesmo
+        # par duas vezes num INSERT com ON CONFLICT.
+        fichas = {
+            (ids_prato[f["prato"]], ids_insumo[f["insumo"]]): f["quantidade"]
+            for f in plano["fichas"]
+        }
+        crud._inserir_varias(
+            conn, "ficha_tecnica", ("prato_id", "insumo_id", "quantidade_por_prato"),
+            [(prato, insumo, q) for (prato, insumo), q in fichas.items()],
+            sufixo="""ON CONFLICT(prato_id, insumo_id)
+                      DO UPDATE SET quantidade_por_prato = excluded.quantidade_por_prato""",
+        )
+        receitas = {}
         linhas_producao = 0
         for producao in plano["producoes"]:
             for item in producao["itens"]:
-                conn.execute(
-                    """INSERT INTO ficha_producao (producao_id, insumo_id, quantidade_por_receita)
-                       VALUES (?, ?, ?)
-                       ON CONFLICT(producao_id, insumo_id)
-                       DO UPDATE SET quantidade_por_receita = excluded.quantidade_por_receita""",
-                    (ids_insumo[producao["nome"]], ids_insumo[item["insumo"]],
-                     item["quantidade"]),
+                receitas[(ids_insumo[producao["nome"]], ids_insumo[item["insumo"]])] = (
+                    item["quantidade"]
                 )
                 linhas_producao += 1
+        crud._inserir_varias(
+            conn, "ficha_producao", ("producao_id", "insumo_id", "quantidade_por_receita"),
+            [(producao, insumo, q) for (producao, insumo), q in receitas.items()],
+            sufixo="""ON CONFLICT(producao_id, insumo_id)
+                      DO UPDATE SET quantidade_por_receita = excluded.quantidade_por_receita""",
+        )
         conn.commit()
     except Exception:
         conn.rollback()
