@@ -36,6 +36,9 @@ tudo junto e "pode dar confusão". Cada um virou uma produção à parte. O
 prato que é desse corte (`CORTES_POR_PRATO`) desconta a produção dele; os
 outros continuam no porcionado comum da peça. O rendimento segue 1 kg por
 kg de peça: cada pacote feito é 1 kg (confirmado pelo usuário em 02/10).
+O corte nasce com a receita do porcionado comum da peça dele, como está no
+sistema: em 01/10 o usuário trocou a da alcatra porcionada para Baby Beef,
+e o bombom e a carne do fondue saem dele também.
 
 Nada aqui grava sozinho: `montar_plano()` diz o que muda e
 `aplicar_plano()` grava, tudo ou nada. Rodar de novo não duplica nada.
@@ -162,11 +165,16 @@ def montar_plano() -> dict:
              JOIN insumos i ON i.id = f.insumo_id"""
     ).fetchall()
     fichas_producao = conn.execute(
-        """SELECT d.nome AS dono, i.nome AS insumo, f.quantidade_por_receita AS quantidade
+        """SELECT d.nome AS dono, i.nome AS insumo, f.quantidade_por_receita AS quantidade,
+                  d.rendimento
              FROM ficha_producao f
              JOIN insumos d ON d.id = f.producao_id
              JOIN insumos i ON i.id = f.insumo_id"""
     ).fetchall()
+    receitas = {}
+    for f in fichas_producao:
+        receitas.setdefault(f["dono"], []).append((f["insumo"], f["quantidade"]))
+    rendimentos = {f["dono"]: f["rendimento"] for f in fichas_producao}
     linhas = conn.execute(
         """SELECT ic.id, ic.descricao, i.nome AS insumo
              FROM itens_contagem ic JOIN insumos i ON i.id = ic.insumo_id"""
@@ -191,10 +199,16 @@ def montar_plano() -> dict:
         atual = insumos.get(nome)
         if atual and atual["unidade_medida"] != "kg":
             problemas.append(f"'{nome}' já existe em '{atual['unidade_medida']}', e não em kg.")
+        # Corte sem receita copia a do porcionado comum da peça, se houver.
+        modelo = GERAL[peca]
+        receita = receitas.get(nome) or receitas.get(modelo) or [(peca, 1.0)]
         producoes.append({
             "nome": nome, "peca": peca,
             "existe": atual is not None,
             "tipo_atual": atual["tipo"] if atual else None,
+            "tem_receita": nome in receitas,
+            "receita": sorted(receita),
+            "rendimento": rendimentos.get(nome) or rendimentos.get(modelo) or RENDIMENTO_INICIAL,
         })
 
     # Quem já cita o destino não pode citar a origem também: a ficha tem
@@ -280,7 +294,7 @@ def aplicar_plano(plano: dict) -> dict:
         _inserir_varias(
             conn, "insumos",
             ("nome", "unidade_medida", "estoque_minimo", "tipo", "rendimento", "setor"),
-            [(p["nome"], "kg", 0, "producao", RENDIMENTO_INICIAL, "cozinha")
+            [(p["nome"], "kg", 0, "producao", p.get("rendimento", RENDIMENTO_INICIAL), "cozinha")
              for p in plano["producoes"] if not p["existe"]],
         )
         ids = {
@@ -301,8 +315,9 @@ def aplicar_plano(plano: dict) -> dict:
             linha["producao_id"]
             for linha in conn.execute("SELECT DISTINCT producao_id FROM ficha_producao").fetchall()
         }
-        receitas = [(ids[p["nome"]], ids[p["peca"]], 1.0)
-                    for p in plano["producoes"] if ids[p["nome"]] not in com_receita]
+        receitas = [(ids[p["nome"]], ids[insumo], quantidade)
+                    for p in plano["producoes"] if ids[p["nome"]] not in com_receita
+                    for insumo, quantidade in p.get("receita", [(p["peca"], 1.0)])]
         _inserir_varias(
             conn, "ficha_producao", ("producao_id", "insumo_id", "quantidade_por_receita"),
             receitas,

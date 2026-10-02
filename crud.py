@@ -285,6 +285,65 @@ def excluir_insumo(nome: str):
     conn.close()
 
 
+def fundir_insumos(conn, origem_id: int, destino_id: int):
+    """Junta `origem` em `destino`: tudo o que citava um passa a citar o outro.
+
+    Para o mesmo produto cadastrado duas vezes — em 02/10/2026, o chopp
+    tinha a contagem em "Chopp Heineken 50 L" e a compra em "Chopp
+    heineken", criado pela importação do bar. Onde os dois aparecem juntos
+    (a mesma ficha, a mesma data de contagem), as quantidades se somam:
+    são o mesmo produto contado em dois lugares. A receita da origem só
+    passa se o destino ainda não tiver uma. Não faz commit.
+    """
+    if origem_id == destino_id:
+        return
+    for tabela, dono, quantidade in (("ficha_tecnica", "prato_id", "quantidade_por_prato"),
+                                     ("ficha_producao", "producao_id", "quantidade_por_receita")):
+        for linha in conn.execute(
+            f"SELECT id, {dono} AS dono, {quantidade} AS q FROM {tabela} WHERE insumo_id = ?",
+            (origem_id,),
+        ).fetchall():
+            ja = conn.execute(
+                f"SELECT id FROM {tabela} WHERE {dono} = ? AND insumo_id = ?",
+                (linha["dono"], destino_id),
+            ).fetchone()
+            if ja:
+                conn.execute(f"UPDATE {tabela} SET {quantidade} = {quantidade} + ? WHERE id = ?",
+                             (linha["q"], ja["id"]))
+                conn.execute(f"DELETE FROM {tabela} WHERE id = ?", (linha["id"],))
+            else:
+                conn.execute(f"UPDATE {tabela} SET insumo_id = ? WHERE id = ?",
+                             (destino_id, linha["id"]))
+    tem_receita = conn.execute(
+        "SELECT 1 FROM ficha_producao WHERE producao_id = ?", (destino_id,)
+    ).fetchone()
+    if tem_receita:
+        conn.execute("DELETE FROM ficha_producao WHERE producao_id = ?", (origem_id,))
+    else:
+        conn.execute("UPDATE ficha_producao SET producao_id = ? WHERE producao_id = ?",
+                     (destino_id, origem_id))
+    for linha in conn.execute(
+        "SELECT id, data, quantidade_contada AS q FROM contagens_fisicas WHERE insumo_id = ?",
+        (origem_id,),
+    ).fetchall():
+        ja = conn.execute(
+            "SELECT id FROM contagens_fisicas WHERE insumo_id = ? AND data = ?",
+            (destino_id, linha["data"]),
+        ).fetchone()
+        if ja:
+            conn.execute("UPDATE contagens_fisicas SET quantidade_contada = quantidade_contada + ? "
+                         "WHERE id = ?", (linha["q"], ja["id"]))
+            conn.execute("DELETE FROM contagens_fisicas WHERE id = ?", (linha["id"],))
+        else:
+            conn.execute("UPDATE contagens_fisicas SET insumo_id = ? WHERE id = ?",
+                         (destino_id, linha["id"]))
+    for tabela in ("producoes", "producoes_consumo", "compras", "baixas",
+                   "mapeamento_produtos_nfe", "itens_contagem"):
+        conn.execute(f"UPDATE {tabela} SET insumo_id = ? WHERE insumo_id = ?",
+                     (destino_id, origem_id))
+    conn.execute("DELETE FROM insumos WHERE id = ?", (origem_id,))
+
+
 def _excluir_insumo(conn, insumo_id: int):
     """O miolo de `excluir_insumo`, sem commit: para quem já tem transação."""
     conn.execute("DELETE FROM ficha_tecnica WHERE insumo_id = ?", (insumo_id,))

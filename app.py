@@ -1832,7 +1832,8 @@ def _separar_cozinha_fria():
         pd.DataFrame([
             {
                 "Produção": p["nome"],
-                "Consome (por receita)": f"1 kg de {p['peca']}",
+                "Consome (por receita)": ", ".join(
+                    f"{q:g} kg de {insumo}" for insumo, q in p["receita"]),
                 "Situação": "já existe" if p["existe"] and p["tipo_atual"] == "producao"
                 else "vira produção" if p["existe"] else "nova",
             }
@@ -1975,6 +1976,28 @@ def _extras_do_bar(plano):
             "receita e o que tiver sido lançado dela.",
             icon=":material/delete:",
         )
+    antigos = plano.get("renomear_pratos", [])
+    if antigos or plano.get("pratos_que_saem") or plano.get("insumos_que_saem"):
+        with st.expander("🧹 O que a importação anterior do bar deixou"):
+            st.caption(
+                "A importação de antes dava ao drink o nome da aba e criava um "
+                "insumo em litro para cada grafia que não conhecia. O prato com "
+                "nome de aba ganha o nome novo e fica com as vendas e a Zig dele; "
+                "o de aba repetida, sem venda nem Zig, sai; e o insumo sem "
+                "histórico que nada mais usa sai também."
+            )
+            if antigos:
+                st.markdown(f"**{len(antigos)} prato(s) renomeado(s)**")
+                st.dataframe(
+                    pd.DataFrame([{"Hoje": r["de"], "Passa a ser": r["para"]} for r in antigos]),
+                    hide_index=True, width="stretch", height=250,
+                )
+            if plano.get("pratos_que_saem"):
+                st.markdown(f"**{len(plano['pratos_que_saem'])} prato(s) que saem:** "
+                            + ", ".join(plano["pratos_que_saem"]))
+            if plano.get("insumos_que_saem"):
+                st.markdown(f"**{len(plano['insumos_que_saem'])} insumo(s) que saem:** "
+                            + ", ".join(plano["insumos_que_saem"]))
 
 
 def _importar_ficha_da_cozinha():
@@ -2138,6 +2161,13 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
             key=f"{prefixo}_corrigir_unidades",
         )
 
+    apagar_vazios = False
+    if prefixo == "bar" and plano.get("pratos_vazios"):
+        apagar_vazios = st.checkbox(
+            "Apagar também os pratos do bar sem ficha, sem venda e sem produto da "
+            "Zig: " + ", ".join(f"'{n}'" for n in plano["pratos_vazios"]),
+            value=False, key="bar_apagar_vazios",
+        )
     substituir = st.checkbox(
         "Substituir a ficha atual dos pratos e das produções importados",
         value=True,
@@ -2156,7 +2186,9 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
         try:
             feito = ficha_import.aplicar_plano(
                 plano, substituir, corrigir_unidades,
-                depois=(lambda conn: bar_import.gravar_extras(conn, plano))
+                depois=(lambda conn: bar_import.gravar_extras(conn, plano, apagar_vazios))
+                if prefixo == "bar" else None,
+                antes=(lambda conn: bar_import.renomear_pratos(conn, plano))
                 if prefixo == "bar" else None,
             )
         except Exception as e:
@@ -2174,6 +2206,11 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
             recado += f" {extras['zig']} produto(s) da Zig ligado(s) a prato."
         if extras.get("removidos"):
             recado += f" {extras['removidos']} produção(ões) que saíram excluída(s)."
+        if extras.get("pratos_apagados") or extras.get("insumos_apagados"):
+            recado += (f" Da importação anterior: {extras.get('pratos_apagados', 0)} prato(s) "
+                       f"e {extras.get('insumos_apagados', 0)} insumo(s) apagados.")
+        if plano.get("renomear_pratos"):
+            recado += f" {len(plano['renomear_pratos'])} prato(s) renomeado(s)."
         st.success(recado)
         for chave_sessao in chaves_para_limpar:
             st.session_state.pop(chave_sessao, None)
@@ -3094,11 +3131,11 @@ def _importar_planilha_de_contagem():
         st.info(
             "Estas linhas trocam de nome, e o que já foi contado nelas vai junto: "
             + "; ".join(
-                f"{r['de']} → {r['para']}"
-                + (f" (junta com o '{r['insumo_para']}' que a ficha do bar criou)"
-                   if r.get("funde")
-                   else f" (o insumo passa a se chamar '{r['insumo_para']}')"
-                   if r["renomeia_insumo"] else f" (passa para '{r['insumo_para']}')")
+                f"{r['de']} → {r['para']} (o insumo '{r['insumo_de']}' passa a se chamar "
+                f"'{r['insumo_para']}'"
+                + (f" e absorve {', '.join(repr(n) for n in r['fundir'])}, com compras, "
+                   "fichas e contagens" if r["fundir"] else "")
+                + ")"
                 for r in plano["renomear"]
             ),
             icon=":material/edit:",

@@ -48,6 +48,13 @@ O plano também traz o que não vem da planilha:
   desses pratos (pelo nome, ou por `ZIG`) passa a apontar para ele.
 - **Conde de Campos**: não é mais vendido (02/10/2026). A produção
   "Conde de Campos (lote)", criada pela importação do Preparos, sai.
+- **O que a importação antiga deixou** (a *Ficha tecnica bar* foi
+  importada no real em 01/10 pelo importador de antes, que dava ao drink o
+  nome da aba e criava um insumo em litro para cada grafia que não
+  conhecia): o prato com nome de aba é **renomeado** para o nome novo, e
+  fica com as vendas e o mapeamento da Zig dele; o de aba repetida sai,
+  se não tiver venda nem Zig; e o insumo que nada mais usa depois da
+  importação, sem histórico nenhum, sai também.
 
 Nada aqui grava: `montar_plano()` devolve o que seria feito, e
 `gravar_extras(conn, plano)` grava a parte que só o bar tem, dentro da
@@ -140,7 +147,7 @@ NOMES_DE_DRINK = {
     "vinho do porto": "Vinho do Porto",
     "box suave": "Vinho Suave Taça",
     "balde heineken 6 und": "Balde Heineken 6 un",
-    "chopp amstel promo": "Chopp Amstel",
+    "chopp amstel promo": "Chopp Amstel Promo",
     "chopp heineken": "Chopp Heineken",
     # cafés e chocolate
     "cafe c petifour": "Café com Petit Four",
@@ -569,8 +576,6 @@ ZIG = {
     "Schweppes Tônica": "Tonica Schweppes Original Lata 350 ml",
     "Schweppes Tônica Sem Açucar": "Tonica Schweppes sem Açucar Lata 350 ml",
     "Monster Green zero 473 ml": "Monster Juice Green Lata 473 ml Zero",
-    "Chopp Amstel Promo": "Chopp Amstel",
-    "Chopp Heineken Promo": "Chopp Heineken",
     "Sangria Taça": "Sangria",
     "Aperol Spritz Taça": "Aperol Spritz",
     "Coquetel de Frutas s/ Álcool": "Coquetel de Frutas sem Álcool",
@@ -717,6 +722,40 @@ def montar_plano(receitas: list[dict]) -> dict:
         for d in conn.execute("SELECT nome, unidade_medida, tipo FROM insumos").fetchall()
     }
     ja_tem_prato = {d["nome"] for d in conn.execute("SELECT nome FROM pratos").fetchall()}
+    por_chave = {}
+    for nome in sorted(existentes):
+        por_chave.setdefault(chave(nome), nome)
+    do_bar = {
+        d["nome"]: dict(d) for d in conn.execute(
+            """SELECT p.nome,
+                      EXISTS (SELECT 1 FROM ficha_tecnica x WHERE x.prato_id = p.id) AS ficha,
+                      EXISTS (SELECT 1 FROM vendas_diarias x WHERE x.prato_id = p.id) AS venda,
+                      EXISTS (SELECT 1 FROM mapeamento_produtos_zig x WHERE x.prato_id = p.id)
+                          AS zig
+                 FROM pratos p WHERE p.setor = 'bar'"""
+        ).fetchall()
+    }
+    citados_por = {}
+    for d in conn.execute(
+        """SELECT i.nome AS insumo, p.nome AS prato
+             FROM ficha_tecnica f
+             JOIN insumos i ON i.id = f.insumo_id JOIN pratos p ON p.id = f.prato_id"""
+    ).fetchall():
+        citados_por.setdefault(d["insumo"], set()).add(d["prato"])
+    sem_historico = {
+        d["nome"] for d in conn.execute(
+            """SELECT i.nome FROM insumos i WHERE NOT (
+                   EXISTS (SELECT 1 FROM compras x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM contagens_fisicas x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes_consumo x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM ficha_producao x
+                           WHERE x.producao_id = i.id OR x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM baixas x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM itens_contagem x WHERE x.insumo_id = i.id))"""
+        ).fetchall()
+    }
     refrigerantes = _refrigerantes(conn)
     sem_prato_na_zig = [dict(d) for d in conn.execute(
         """SELECT sku, nome_produto FROM mapeamento_produtos_zig
@@ -724,6 +763,7 @@ def montar_plano(receitas: list[dict]) -> dict:
     ).fetchall()]
     conn.close()
 
+    todas = receitas
     ignoradas = [r for r in receitas if chave(r["aba"]) in ABAS_IGNORADAS]
     receitas = [r for r in receitas if chave(r["aba"]) not in ABAS_IGNORADAS]
     for receita in ignoradas:
@@ -773,6 +813,10 @@ def montar_plano(receitas: list[dict]) -> dict:
             avisos.append(corrigida[1] + ".")
             quantidade = corrigida[0]
         item = {**item, "quantidade": quantidade}
+
+        if insumo not in existentes and chave(insumo) in por_chave:
+            # O mesmo insumo com outra caixa ("Chopp heineken"): usa o que existe.
+            insumo = por_chave[chave(insumo)]
 
         if tipos.get(insumo) == "producao":
             if _contavel(item) and nome in FATORES_POR_UNIDADE:
@@ -889,6 +933,51 @@ def montar_plano(receitas: list[dict]) -> dict:
 
     pratos = sorted({f["prato"] for f in fichas})
     remover = [nome for nome in PRODUCOES_QUE_SAIRAM if nome in existentes]
+
+    # Prato que a importação antiga criou com o nome da aba.
+    destino_da_aba = {}
+    for receita in todas:
+        aba = chave(receita["aba"])
+        if aba in ABAS_IGNORADAS:
+            destino_da_aba[receita["aba"].strip()] = None
+        elif aba in PREPAROS:
+            destino_da_aba[receita["aba"].strip()] = PREPAROS_VENDIDOS.get(aba, (None,))[0]
+        else:
+            destino_da_aba[receita["aba"].strip()] = nome_do_drink(receita)
+    renomear_pratos, pratos_que_saem, pratos_que_ficam = [], [], []
+    tomados = set(ja_tem_prato)
+    for antigo, novo in sorted(destino_da_aba.items()):
+        if antigo not in do_bar or antigo == novo:
+            continue
+        if novo and novo in pratos and novo not in tomados:
+            renomear_pratos.append({"de": antigo, "para": novo})
+            tomados.add(novo)
+        elif not do_bar[antigo]["venda"] and not do_bar[antigo]["zig"]:
+            pratos_que_saem.append(antigo)
+        else:
+            pratos_que_ficam.append(antigo)
+    for antigo in pratos_que_ficam:
+        avisos.append(
+            f"O prato '{antigo}', da importação antiga, tem venda ou produto da Zig e "
+            "ficou como está (com a ficha antiga). Ligue o produto da Zig ao prato "
+            "novo e apague-o quando não precisar mais."
+        )
+    renomeados = {r["para"] for r in renomear_pratos}
+
+    # Prato do bar sem ficha, sem venda e sem Zig, que nenhuma aba gera:
+    # feito à mão e não usado. Só sai se quem importa marcar.
+    afetados = set(pratos) | {r["de"] for r in renomear_pratos} | set(pratos_que_saem)
+    vazios = sorted(
+        nome for nome, d in do_bar.items()
+        if nome not in afetados and not d["ficha"] and not d["venda"] and not d["zig"]
+    )
+
+    # Insumo sem histórico que, depois da importação, nenhuma ficha cita.
+    insumos_que_saem = sorted(
+        nome for nome in sem_historico
+        if nome not in insumos and nome not in remover and nome in citados_por
+        and citados_por[nome] <= afetados
+    )
     return {
         "setor": SETOR,
         "insumos": dict(sorted(insumos.items())),
@@ -900,7 +989,11 @@ def montar_plano(receitas: list[dict]) -> dict:
         ),
         "producoes": sorted(producoes, key=lambda p: p["nome"]),
         "pratos": pratos,
-        "pratos_novos": sorted(p for p in pratos if p not in ja_tem_prato),
+        "pratos_novos": sorted(p for p in pratos if p not in ja_tem_prato and p not in renomeados),
+        "renomear_pratos": renomear_pratos,
+        "pratos_que_saem": pratos_que_saem,
+        "pratos_vazios": vazios,
+        "insumos_que_saem": insumos_que_saem,
         "fichas": sorted(fichas, key=lambda f: (f["prato"], f["insumo"])),
         # A planilha do bar não cobre a cozinha: os insumos e pratos que ela
         # não cita não são órfãos, são de outro setor.
@@ -954,9 +1047,19 @@ def _ligacoes_da_zig(sem_prato: list[dict], pratos: list[str]) -> list[dict]:
     return ligacoes
 
 
-def gravar_extras(conn, plano: dict) -> dict:
+def renomear_pratos(conn, plano: dict) -> int:
+    """Antes de gravar a ficha: o prato com nome de aba ganha o nome novo,
+    para a importação achar o prato (com as vendas e a Zig dele) em vez de
+    criar outro."""
+    for troca in plano.get("renomear_pratos", []):
+        conn.execute("UPDATE pratos SET nome = ? WHERE nome = ?", (troca["para"], troca["de"]))
+    return len(plano.get("renomear_pratos", []))
+
+
+def gravar_extras(conn, plano: dict, apagar_vazios: bool = False) -> dict:
     """O que só o bar grava, na transação de `ficha_import.aplicar_plano`:
-    os produtos da Zig ligados aos pratos e as produções que saíram."""
+    os produtos da Zig ligados aos pratos, as produções que saíram, e o que
+    a importação antiga deixou (pratos de aba repetida, insumos sem uso)."""
     from crud import _atualizar_linhas, _excluir_insumo
 
     pratos = {d["nome"]: d["id"] for d in conn.execute("SELECT id, nome FROM pratos").fetchall()}
@@ -977,7 +1080,29 @@ def gravar_extras(conn, plano: dict) -> dict:
         if producao["nome"] in insumos:
             _excluir_insumo(conn, insumos[producao["nome"]])
             removidos += 1
-    return {"zig": len(ligar), "removidos": removidos}
+
+    # Prato sai só sem venda e sem Zig (o plano conferiu, e o banco recusa
+    # pela chave estrangeira se algo apareceu desde a prévia).
+    saem = list(plano.get("pratos_que_saem", []))
+    if apagar_vazios:
+        saem += plano.get("pratos_vazios", [])
+    pratos_apagados = 0
+    for nome in saem:
+        if nome in pratos:
+            conn.execute("DELETE FROM ficha_tecnica WHERE prato_id = ?", (pratos[nome],))
+            conn.execute("DELETE FROM pratos WHERE id = ?", (pratos[nome],))
+            pratos_apagados += 1
+    insumos_apagados = 0
+    for nome in plano.get("insumos_que_saem", []):
+        if nome in insumos:
+            citado = conn.execute(
+                "SELECT 1 FROM ficha_tecnica WHERE insumo_id = ?", (insumos[nome],)
+            ).fetchone()
+            if not citado:
+                _excluir_insumo(conn, insumos[nome])
+                insumos_apagados += 1
+    return {"zig": len(ligar), "removidos": removidos,
+            "pratos_apagados": pratos_apagados, "insumos_apagados": insumos_apagados}
 
 
 def _contavel(item) -> bool:

@@ -882,7 +882,7 @@ def _rendimento_confiavel(receita: dict, avisos: list) -> float:
 # ---------- Gravação ----------
 
 def aplicar_plano(plano: dict, substituir_fichas: bool = True,
-                  corrigir_unidades: bool = True, depois=None) -> dict:
+                  corrigir_unidades: bool = True, depois=None, antes=None) -> dict:
     """Grava o plano no banco, tudo ou nada. Devolve a contagem do que foi feito.
 
     Com `substituir_fichas`, a ficha de cada prato e de cada produção da
@@ -893,9 +893,10 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
     O plano pode trazer `setor` ('cozinha' ou 'bar', ver bar_import.py):
     os pratos e as produções dele ficam marcados com esse setor.
 
-    `depois(conn)` roda dentro da mesma transação, antes do commit: é por
-    onde o bar grava o que só ele tem (mapeamento da Zig, produção que saiu).
-    O que ela devolver volta em 'depois'.
+    `antes(conn)` e `depois(conn)` rodam dentro da mesma transação, no
+    começo e antes do commit: é por onde o bar renomeia os pratos antigos
+    e grava o que só ele tem (mapeamento da Zig, o que saiu). O que
+    `depois` devolver volta em 'depois'.
     """
     # Em lotes (crud._inserir_varias e cia.): linha a linha eram umas
     # trezentas idas ao banco na planilha do bar, cada uma cruzando dos EUA
@@ -903,6 +904,8 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
     setor = plano.get("setor", "cozinha")
     conn = get_connection()
     try:
+        if antes:
+            antes(conn)
         rendimento = {p["nome"]: p["rendimento"] for p in plano["producoes"]}
         novos = []
         for nome in plano["insumos_novos"]:
