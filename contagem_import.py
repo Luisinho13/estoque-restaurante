@@ -478,8 +478,40 @@ BEBIDAS_DA_COZINHA = {
     "CONHAQUE DOMEC - 1000 ML (20 DS)": _i("Conhaque", 1, "l"),
 }
 
+# Linhas que a planilha escreve de um jeito e o sistema conta de outro.
+# O chopp é contado em litro (ver MEDIDAS): o tamanho do barril não muda
+# nada, e a equipe passou a contar um chopp por marca. Pedido do usuário em
+# 02/10/2026: "deixe chopp heineken e chopp amstel apenas". Os barris de 30
+# e de 50 litros da mesma marca viram uma linha só, com os litros somados.
+LINHAS_RENOMEADAS = {
+    "CHOPP AMSTEL 50L": "CHOPP AMSTEL",
+    "CHOPP HEINEKEN 30L": "CHOPP HEINEKEN",
+    "CHOPP HEINEKEN 50L": "CHOPP HEINEKEN",
+}
+
+# Bebidas que saíram da contagem: a casa não vende mais (pedido do usuário
+# em 02/10/2026). A linha é ignorada mesmo que continue na planilha.
+BEBIDAS_FORA = {
+    "COCA COLA LATA 350 ML",
+    "COCA COLA ZERO LATA 350 ML",
+}
+
 _ALIMENTOS = {chave(k): v for k, v in ALIMENTOS.items()}
 _BEBIDAS_DA_COZINHA = {chave(k): v for k, v in BEBIDAS_DA_COZINHA.items()}
+_RENOMEADAS = {chave(k): v for k, v in LINHAS_RENOMEADAS.items()}
+_BEBIDAS_FORA = {chave(k) for k in BEBIDAS_FORA}
+
+
+def descricao_no_sistema(descricao: str) -> str:
+    """A descrição com que a linha da planilha fica no sistema."""
+    return _RENOMEADAS.get(chave(descricao), descricao)
+
+
+def _somar_contagem(a, b):
+    """Soma de duas células de contagem, em que branco não é zero."""
+    if a is None and b is None:
+        return None
+    return (a or 0.0) + (b or 0.0)
 
 
 # ---------- Nome de bebida ----------
@@ -575,7 +607,9 @@ def ler_planilha(arquivo) -> list[dict]:
     CONTAGEM (None se em branco) e 'contagem_invalida' guarda o texto
     quando ele não é número. Uma descrição repetida em duas seções entra
     só na primeira: a mesma prateleira contada duas vezes dobraria o
-    estoque.
+    estoque. A exceção são as linhas que `LINHAS_RENOMEADAS` junta (os
+    barris de chopp da mesma marca): essas são prateleiras diferentes, e a
+    contagem delas é somada.
     """
     livro = openpyxl.load_workbook(arquivo, data_only=True, read_only=True)
     if ABA not in livro.sheetnames:
@@ -583,7 +617,7 @@ def ler_planilha(arquivo) -> list[dict]:
 
     aba = livro[ABA]
     col_descricao, col_medida, col_contagem = _colunas(aba)
-    linhas, vistas = [], set()
+    linhas, vistas = [], {}
     secao, bebida = None, True
     for numero, linha in enumerate(aba.iter_rows(values_only=True), 1):
         celulas = list(linha) + [None] * (col_contagem + 1)
@@ -600,13 +634,18 @@ def ler_planilha(arquivo) -> list[dict]:
             continue
         if secao is None or secao == "+":
             continue
-        if chave(descricao) in vistas:
-            continue
-        vistas.add(chave(descricao))
+        renomeada = chave(descricao) in _RENOMEADAS
+        descricao = descricao_no_sistema(descricao)
         try:
             valor, invalido = numero_da_planilha(contagem), None
         except ValueError:
             valor, invalido = None, str(contagem)
+        if chave(descricao) in vistas:
+            anterior = vistas[chave(descricao)]
+            if renomeada:
+                anterior["contagem"] = _somar_contagem(anterior["contagem"], valor)
+                anterior["contagem_invalida"] = anterior["contagem_invalida"] or invalido
+            continue
         linhas.append({
             "secao": secao,
             "ordem": numero,
@@ -616,6 +655,7 @@ def ler_planilha(arquivo) -> list[dict]:
             "contagem": valor,
             "contagem_invalida": invalido,
         })
+        vistas[chave(descricao)] = linhas[-1]
     livro.close()
     return linhas
 
@@ -638,7 +678,11 @@ def montar_plano(linhas: list[dict]) -> dict:
       mapeamento, unidade que não bate com a do insumo já cadastrado);
     - 'unidades_a_corrigir': {insumo: (unidade atual, unidade nova)} dos
       insumos cuja unidade mudou na planilha e que ainda não têm nenhum
-      histórico, então podem trocar de unidade sem estragar nada.
+      histórico, então podem trocar de unidade sem estragar nada;
+    - 'renomear': linhas do sistema que trocam de descrição
+      (`LINHAS_RENOMEADAS`), levando o que já foi contado nelas;
+    - 'excluiveis': insumos que perdem a última linha e não têm histórico
+      nenhum — a tela oferece excluir, para não ficarem em "Fora da planilha".
     """
     from cozinha_fria import porcionado_de
 
@@ -667,15 +711,43 @@ def montar_plano(linhas: list[dict]) -> dict:
                 OR EXISTS (SELECT 1 FROM ficha_tecnica x WHERE x.insumo_id = i.id)
                 OR EXISTS (SELECT 1 FROM ficha_producao x
                            WHERE x.insumo_id = i.id OR x.producao_id = i.id)
-                OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)"""
+                OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM baixas x WHERE x.insumo_id = i.id)"""
         ).fetchall()
     }
-    atuais = conn.execute(
+    # Insumo sem nada próprio: nenhuma compra, contagem, produção, baixa,
+    # nota ou linha de contagem. No máximo é citado numa ficha. É o caso do
+    # que a importação do bar criou antes da contagem ser reimportada.
+    so_em_ficha = {
+        linha["nome"] for linha in conn.execute(
+            """SELECT i.nome FROM insumos i WHERE NOT (
+                   EXISTS (SELECT 1 FROM compras x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM contagens_fisicas x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM producoes_consumo x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM ficha_producao x WHERE x.producao_id = i.id)
+                OR EXISTS (SELECT 1 FROM mapeamento_produtos_nfe x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM baixas x WHERE x.insumo_id = i.id)
+                OR EXISTS (SELECT 1 FROM itens_contagem x WHERE x.insumo_id = i.id))"""
+        ).fetchall()
+    }
+    atuais = [dict(linha) for linha in conn.execute(
         """SELECT ic.id, ic.descricao, i.nome AS insumo,
                   EXISTS (SELECT 1 FROM contagens_itens x WHERE x.item_id = ic.id) AS contado
              FROM itens_contagem ic JOIN insumos i ON i.id = ic.insumo_id"""
-    ).fetchall()
+    ).fetchall()]
     conn.close()
+
+    renomear = _renomeacoes(atuais, existentes, so_em_ficha)
+    for troca in renomear:
+        # Daqui para baixo o plano enxerga o sistema já com os nomes novos.
+        for atual in atuais:
+            if atual["id"] == troca["id"]:
+                atual["descricao"], atual["insumo"] = troca["para"], troca["insumo_para"]
+        if troca["renomeia_insumo"]:
+            existentes[troca["insumo_para"]] = existentes.pop(troca["insumo_de"])
+            if troca["insumo_de"] in com_historico:
+                com_historico.add(troca["insumo_para"])
 
     itens, novos, a_definir, problemas, ignoradas = [], {}, [], [], []
     a_corrigir = {}
@@ -683,6 +755,9 @@ def montar_plano(linhas: list[dict]) -> dict:
         unidade_contagem = _unidade_de_contagem(linha["medida"])
         k = chave(linha["descricao"])
 
+        if k in _BEBIDAS_FORA:
+            ignoradas.append(linha["descricao"])
+            continue
         if linha["bebida"]:
             destino = _BEBIDAS_DA_COZINHA.get(k) or (
                 nome_de_bebida(linha["descricao"]), 1, unidade_contagem
@@ -745,7 +820,8 @@ def montar_plano(linhas: list[dict]) -> dict:
     # uma linha que ninguém conta. Só sai a linha: o insumo fica, com o
     # que tiver de compra e ficha. Linha que já tem contagem gravada fica,
     # porque apagá-la apagaria a história da contagem.
-    na_planilha = {chave(linha["descricao"]) for linha in linhas}
+    # Linha ignorada (Coca lata, que saiu de linha) também sai do sistema.
+    na_planilha = {chave(linha["descricao"]) for linha in linhas} - {chave(d) for d in ignoradas}
     saem, ficam = [], []
     for atual in atuais:
         if chave(atual["descricao"]) in na_planilha:
@@ -763,6 +839,8 @@ def montar_plano(linhas: list[dict]) -> dict:
     sem_linha = sorted({s["insumo"] for s in saem} - continuam)
 
     return {
+        "renomear": renomear,
+        "excluiveis": [nome for nome in sem_linha if nome not in com_historico],
         "itens": itens,
         "insumos_novos": novos,
         "a_definir": a_definir,
@@ -775,9 +853,96 @@ def montar_plano(linhas: list[dict]) -> dict:
     }
 
 
-def aplicar_plano(plano: dict) -> dict:
+def _renomeacoes(atuais: list[dict], existentes: dict, so_em_ficha: set = frozenset()
+                 ) -> list[dict]:
+    """As linhas do sistema que `LINHAS_RENOMEADAS` troca de descrição.
+
+    Quando várias linhas antigas viram a mesma (os barris de 30 e de 50 L),
+    fica a que já tem contagem gravada, para o histórico seguir com ela; as
+    outras saem como qualquer linha que deixou a planilha. O insumo da linha
+    troca de nome junto, e compra, nota fiscal e contagem continuam ligadas
+    a ele. Se o nome novo já existe sem nada próprio (só citado em ficha,
+    como o "Chopp Amstel" que a importação do bar cria), os dois viram um:
+    a ficha passa para o insumo antigo, que fica com o nome novo
+    (`funde`). Só quando o nome novo tem histórico próprio a linha passa
+    para ele e o total contado é refeito — aí as compras antigas ficam no
+    insumo antigo.
+    """
+    ja_tem = {chave(a["descricao"]) for a in atuais}
+    candidatas = {}
+    for atual in atuais:
+        para = _RENOMEADAS.get(chave(atual["descricao"]))
+        if para is None or chave(para) in ja_tem:
+            continue
+        candidatas.setdefault(para, []).append(atual)
+
+    trocas, nomes_tomados = [], set(existentes)
+    for para, linhas in sorted(candidatas.items()):
+        escolhida = sorted(linhas, key=lambda a: (not a["contado"], a["descricao"]))[0]
+        insumo_para = nome_de_bebida(para)
+        funde = insumo_para in nomes_tomados and insumo_para in so_em_ficha
+        renomeia = insumo_para not in nomes_tomados or funde
+        nomes_tomados.add(insumo_para)
+        trocas.append({
+            "id": escolhida["id"],
+            "de": escolhida["descricao"],
+            "para": para,
+            "contado": bool(escolhida["contado"]),
+            "insumo_de": escolhida["insumo"],
+            "insumo_para": insumo_para,
+            "renomeia_insumo": renomeia,
+            "funde": funde,
+        })
+    return trocas
+
+
+def _aplicar_renomeacoes(conn, renomear: list[dict]) -> int:
+    """Troca a descrição das linhas (e o nome ou o insumo delas)."""
+    from crud import refazer_totais_contados
+
+    if not renomear:
+        return 0
+    ids = {
+        linha["nome"]: linha["id"]
+        for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()
+    }
+    refazer = set()
+    for troca in renomear:
+        conn.execute("UPDATE itens_contagem SET descricao = ? WHERE id = ?",
+                     (troca["para"], troca["id"]))
+        if troca.get("funde"):
+            # O novo só é citado em ficha: a ficha passa para o antigo, o
+            # novo sai, e o antigo fica com o nome.
+            novo, antigo = ids[troca["insumo_para"]], ids[troca["insumo_de"]]
+            for tabela in ("ficha_tecnica", "ficha_producao"):
+                conn.execute(f"UPDATE {tabela} SET insumo_id = ? WHERE insumo_id = ?",
+                             (antigo, novo))
+            conn.execute("DELETE FROM insumos WHERE id = ?", (novo,))
+        if troca["renomeia_insumo"]:
+            conn.execute("UPDATE insumos SET nome = ? WHERE id = ?",
+                         (troca["insumo_para"], ids[troca["insumo_de"]]))
+            continue
+        conn.execute("UPDATE itens_contagem SET insumo_id = ? WHERE id = ?",
+                     (ids[troca["insumo_para"]], troca["id"]))
+        refazer |= {ids[troca["insumo_de"]], ids[troca["insumo_para"]]}
+    if refazer:
+        datas = sorted({
+            linha["data"] for linha in conn.execute(
+                "SELECT DISTINCT data FROM contagens_itens WHERE item_id IN ("
+                + ", ".join("?" * len(renomear)) + ")",
+                [t["id"] for t in renomear],
+            ).fetchall()
+        })
+        refazer_totais_contados(conn, refazer, datas, "linha da contagem renomeada")
+    return len(renomear)
+
+
+def aplicar_plano(plano: dict, excluir_sem_linha: bool = False) -> dict:
     """Grava o plano: cria os insumos que faltam, os itens da contagem, e
     tira as linhas que saíram da planilha.
+
+    Com `excluir_sem_linha`, os insumos de `plano['excluiveis']` (perderam a
+    última linha e não têm histórico nenhum) são excluídos também.
 
     Tudo ou nada. Reimportar a mesma planilha não duplica: o item é
     achado pela descrição e atualizado. Um fator que o usuário já
@@ -794,6 +959,7 @@ def aplicar_plano(plano: dict) -> dict:
 
     conn = get_connection()
     try:
+        renomeadas = _aplicar_renomeacoes(conn, plano.get("renomear", []))
         _inserir_varias(
             conn, "insumos", ("nome", "unidade_medida", "estoque_minimo"),
             [(nome, unidade, 0) for nome, unidade in plano["insumos_novos"].items()],
@@ -840,6 +1006,19 @@ def aplicar_plano(plano: dict) -> dict:
              "insumo_id": "INTEGER", "fator_conversao": "DOUBLE PRECISION"},
             mudadas,
         )
+        excluidos = 0
+        if excluir_sem_linha and plano.get("excluiveis"):
+            # Sem histórico nenhum (o plano conferiu) e já sem linha: sai só
+            # o cadastro. Se algo apareceu desde a prévia, o banco recusa
+            # pela chave estrangeira e nada é gravado.
+            alvos = [ids[nome] for nome in plano["excluiveis"] if nome in ids]
+            sobrou = conn.execute(
+                f"SELECT COUNT(*) AS n FROM itens_contagem WHERE insumo_id IN "
+                f"({', '.join('?' * len(alvos))})", alvos,
+            ).fetchone()["n"] if alvos else 0
+            if sobrou:
+                raise ValueError("Um insumo a excluir ainda tem linha na contagem.")
+            excluidos = _apagar_por_id(conn, "insumos", alvos)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -852,6 +1031,8 @@ def aplicar_plano(plano: dict) -> dict:
         "itens_criados": len(novas),
         "itens_atualizados": len(mudadas),
         "itens_removidos": removidas,
+        "linhas_renomeadas": renomeadas,
+        "insumos_excluidos": excluidos,
     }
 
 

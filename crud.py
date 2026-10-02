@@ -280,8 +280,13 @@ def excluir_insumo(nome: str):
     if not insumo:
         conn.close()
         raise ValueError(f"Insumo '{nome}' não encontrado.")
+    _excluir_insumo(conn, insumo["id"])
+    conn.commit()
+    conn.close()
 
-    insumo_id = insumo["id"]
+
+def _excluir_insumo(conn, insumo_id: int):
+    """O miolo de `excluir_insumo`, sem commit: para quem já tem transação."""
     conn.execute("DELETE FROM ficha_tecnica WHERE insumo_id = ?", (insumo_id,))
     conn.execute(
         "DELETE FROM ficha_producao WHERE producao_id = ? OR insumo_id = ?",
@@ -306,8 +311,6 @@ def excluir_insumo(nome: str):
     conn.execute("DELETE FROM itens_contagem WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM mapeamento_produtos_nfe WHERE insumo_id = ?", (insumo_id,))
     conn.execute("DELETE FROM insumos WHERE id = ?", (insumo_id,))
-    conn.commit()
-    conn.close()
 
 
 def excluir_prato(nome: str):
@@ -998,6 +1001,63 @@ def registrar_contagem_pela_planilha(por_item: dict, por_insumo: dict, data: str
         raise
     conn.close()
     return resumo
+
+
+def refazer_totais_contados(conn, insumos: set, datas: list, motivo: str) -> int:
+    """Refaz o total contado de `insumos` em cada uma de `datas`, pelas linhas.
+
+    Depois que uma linha da contagem muda de insumo, o total gravado em
+    `contagens_fisicas` naquele dia ainda é o antigo: o bombom contado em
+    28/09 continuaria somado à alcatra porcionada (cozinha_fria.py). O total
+    de cada insumo volta a ser a soma das linhas dele preenchidas no dia
+    (linha × fator). Insumo que ficou sem nenhuma linha preenchida deixa de
+    ter contagem naquele dia, como se não tivesse sido contado — a mesma
+    regra da tela. `motivo` vai para a observação. Não faz commit.
+    """
+    if not insumos or not datas:
+        return 0
+    lista = sorted(insumos)
+    filtro = f"insumo_id IN ({_marcadores(len(lista))})"
+    refeitos = 0
+    for data in datas:
+        linhas = conn.execute(
+            f"""SELECT ic.insumo_id, ci.quantidade, ic.fator_conversao
+                  FROM contagens_itens ci JOIN itens_contagem ic ON ic.id = ci.item_id
+                 WHERE ci.data = ? AND ic.{filtro}""",
+            [data, *lista],
+        ).fetchall()
+        totais = {}
+        for linha in linhas:
+            if linha["fator_conversao"] is None:
+                raise ValueError(
+                    f"Uma linha contada em {data} está sem fator de conversão: "
+                    "preencha o fator em Itens da Contagem antes."
+                )
+            totais[linha["insumo_id"]] = (
+                totais.get(linha["insumo_id"], 0.0)
+                + linha["quantidade"] * linha["fator_conversao"]
+            )
+        antigas = {
+            a["insumo_id"]: a["observacao"]
+            for a in conn.execute(
+                f"SELECT insumo_id, observacao FROM contagens_fisicas WHERE data = ? AND {filtro}",
+                [data, *lista],
+            ).fetchall()
+        }
+        conn.execute(f"DELETE FROM contagens_fisicas WHERE data = ? AND {filtro}",
+                     [data, *lista])
+        for insumo_id, total in sorted(totais.items()):
+            nota = " · ".join(
+                t for t in (antigas.get(insumo_id), motivo)
+                if t
+            )
+            conn.execute(
+                """INSERT INTO contagens_fisicas (insumo_id, quantidade_contada, data, observacao)
+                   VALUES (?, ?, ?, ?)""",
+                (insumo_id, round(total, 6), data, nota),
+            )
+            refeitos += 1
+    return refeitos
 
 
 def apagar_contagem_do_dia(data: str) -> dict:
@@ -1935,17 +1995,46 @@ def resumo_dashboard(dias: int = 30) -> dict:
     }
 
 
+def _inicio_do_uso(conn) -> datetime.date | None:
+    """O primeiro dia com contagem física ou venda: quando o sistema entrou em uso."""
+    linha = conn.execute(
+        """SELECT MIN(data) AS d FROM (
+               SELECT MIN(data) AS data FROM vendas_diarias
+               UNION ALL
+               SELECT MIN(data) AS data FROM contagens_fisicas
+           ) AS primeiros"""
+    ).fetchone()
+    return datetime.date.fromisoformat(linha["d"]) if linha and linha["d"] else None
+
+
+def _dias_com_dado(conn, dias: int) -> int:
+    """Quantos dos últimos `dias` o sistema já estava em uso.
+
+    É o divisor da média diária. Dividir por 30 o consumo de um sistema que
+    começou há quatro dias dá uma média sete vezes menor que a real, e o
+    "acaba em" fica lá na frente quando o insumo acaba amanhã.
+    """
+    inicio = _inicio_do_uso(conn)
+    if inicio is None:
+        return dias
+    return max(1, min(dias, (hoje() - inicio).days + 1))
+
+
 def cobertura_estoque(dias: int = 30) -> list[dict]:
     """
     Para cada insumo, estima em quantos dias o estoque acaba, usando o consumo
     médio diário do período. É o número que diz o que precisa ser comprado antes
     de faltar — insumo sem consumo no período fica com dias_restantes None.
+    A média divide pelos dias em que o sistema já estava em uso no período.
     """
     consumo = {c["insumo"]: c["consumo"] for c in consumo_por_insumo(dias)}
+    conn = get_connection()
+    divisor = _dias_com_dado(conn, dias)
+    conn.close()
     resultado = []
     for estoque in calcular_estoque_todos_insumos():
         consumo_total = consumo.get(estoque["insumo"], 0)
-        media_diaria = consumo_total / dias if consumo_total else 0
+        media_diaria = consumo_total / divisor if consumo_total else 0
         resultado.append({
             **estoque,
             "consumo_periodo": round(consumo_total, 2),
@@ -1955,6 +2044,118 @@ def cobertura_estoque(dias: int = 30) -> list[dict]:
             ),
         })
     return resultado
+
+
+# Quantos dias de consumo o "acaba em" do dia olha, e a partir de quantos
+# dias de estoque o insumo entra na lista de compra.
+JANELA_DO_DIA = 7
+DIAS_PARA_COMPRAR = 3
+
+
+def resumo_do_dia() -> dict:
+    """O que importa hoje, para o topo do dashboard.
+
+    - a rotina: se a venda de ontem foi lançada (ou o dia marcado como
+      fechado), e o que já entrou hoje de compra, produção e baixa;
+    - as produções com saldo negativo: molho e porcionado que os pratos
+      já gastaram e ninguém lançou. É o que a cozinha precisa lançar;
+    - o que comprar: insumo comprado (não produção) que está negativo,
+      abaixo do mínimo ou que acaba em até DIAS_PARA_COMPRAR dias pelo
+      consumo dos últimos JANELA_DO_DIA dias.
+
+    Insumo que nunca foi contado fica de fora das duas listas: sem contagem,
+    o saldo começa do zero e é negativo por definição (o dashboard já avisa
+    disso à parte).
+    """
+    dia = hoje()
+    ontem = (dia - datetime.timedelta(days=1)).isoformat()
+    conn = get_connection()
+    vendas = conn.execute(
+        """SELECT p.nome AS prato, COALESCE(p.setor, 'cozinha') AS setor,
+                  SUM(v.quantidade) AS quantidade
+             FROM vendas_diarias v JOIN pratos p ON p.id = v.prato_id
+            WHERE v.data = ?
+            GROUP BY p.nome, p.setor
+            ORDER BY quantidade DESC, p.nome""",
+        (ontem,),
+    ).fetchall()
+    lancados = {
+        linha["tipo"]: linha["n"]
+        for linha in conn.execute(
+            """SELECT 'compras' AS tipo, COUNT(*) AS n FROM compras WHERE data = ?
+               UNION ALL
+               SELECT 'producoes', COUNT(*) FROM producoes WHERE data = ?
+               UNION ALL
+               SELECT 'baixas', COUNT(*) FROM baixas WHERE data = ?
+               UNION ALL
+               SELECT 'ontem_fechado', COUNT(*) FROM dias_sem_movimento WHERE data = ?
+               UNION ALL
+               SELECT 'contagens', COUNT(*) FROM contagens_fisicas WHERE data = ?""",
+            (dia.isoformat(), dia.isoformat(), dia.isoformat(), ontem, dia.isoformat()),
+        ).fetchall()
+    }
+    ultima = conn.execute("SELECT MAX(data) AS d FROM contagens_fisicas").fetchone()["d"]
+    divisor = _dias_com_dado(conn, JANELA_DO_DIA)
+    inicio = (dia - datetime.timedelta(days=JANELA_DO_DIA - 1)).isoformat()
+    consumo = {
+        linha["insumo_id"]: linha["consumo"]
+        for linha in conn.execute(
+            f"""SELECT m.insumo_id, SUM(m.saida) AS consumo
+                  FROM ({SQL_MOVIMENTOS}) m
+                 WHERE m.data >= ? AND m.saida > 0
+                 GROUP BY m.insumo_id""",
+            (inicio,),
+        ).fetchall()
+    }
+    ids = {linha["nome"]: linha["id"]
+           for linha in conn.execute("SELECT id, nome FROM insumos").fetchall()}
+    conn.close()
+
+    producoes_no_negativo, comprar = [], []
+    for estoque in calcular_estoque_todos_insumos():
+        contado = estoque["baseline_usada"] != SEM_CONTAGEM
+        saldo = estoque["estoque_atual"]
+        if estoque["tipo"] == "producao":
+            if saldo < 0:
+                producoes_no_negativo.append(estoque)
+            continue
+        if not contado:
+            continue
+        media = consumo.get(ids.get(estoque["insumo"]), 0) / divisor
+        dias_restantes = round(saldo / media, 1) if media > 0 else None
+        if saldo < 0:
+            motivo = "negativo"
+        elif estoque["abaixo_do_minimo"]:
+            motivo = "abaixo do mínimo"
+        elif dias_restantes is not None and dias_restantes <= DIAS_PARA_COMPRAR:
+            motivo = f"acaba em {dias_restantes:g} d"
+        else:
+            continue
+        comprar.append({**estoque, "dias_restantes": dias_restantes,
+                        "consumo_medio_diario": round(media, 2), "motivo": motivo})
+
+    total = sum(v["quantidade"] for v in vendas)
+    return {
+        "hoje": dia.isoformat(),
+        "ontem": ontem,
+        "vendas_ontem": {
+            "total": total,
+            "cozinha": sum(v["quantidade"] for v in vendas if v["setor"] != "bar"),
+            "bar": sum(v["quantidade"] for v in vendas if v["setor"] == "bar"),
+            "pratos": [dict(v) for v in vendas],
+        },
+        "ontem_fechado": bool(lancados.get("ontem_fechado")),
+        "lancados_hoje": {k: lancados.get(k, 0) for k in ("compras", "producoes", "baixas")},
+        "contou_hoje": bool(lancados.get("contagens")),
+        "ultima_contagem": ultima,
+        "dias_sem_contagem": (dia - datetime.date.fromisoformat(ultima)).days if ultima else None,
+        "producoes_no_negativo": sorted(producoes_no_negativo, key=lambda e: e["estoque_atual"]),
+        "comprar": sorted(
+            comprar,
+            key=lambda e: (e["estoque_atual"] >= 0, e["dias_restantes"] is None,
+                           e["dias_restantes"] or 0, e["insumo"]),
+        ),
+    }
 
 
 def movimentacoes_recentes(limite: int = 15) -> list[dict]:

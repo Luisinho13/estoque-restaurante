@@ -561,7 +561,7 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
     Aba sem correspondência vira prato novo com o nome da própria ficha.
     """
     # Aqui dentro para não virar importação circular: cozinha_fria usa `chave`.
-    from cozinha_fria import PORCIONADOS
+    from cozinha_fria import GERAL, porcionado_para
 
     de_para_pratos = de_para_pratos or {}
     avisos = []
@@ -699,7 +699,7 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
         # Carne da cozinha fria (cozinha_fria.py): depois que a peça e o
         # porcionado viraram itens separados, o prato consome o porcionado.
         # Sem isto, reimportar a planilha voltaria a ficha para a peça.
-        porcionado = PORCIONADOS.get(insumo)
+        porcionado = GERAL.get(insumo)
         if porcionado and tipo_atual.get(porcionado) == "producao":
             insumos[porcionado] = unidade_atual[porcionado]
             tipos[porcionado] = "producao"
@@ -776,6 +776,16 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
                     "quantidade": por_porcao,
                     "aba": receita["aba"],
                 })
+
+    # O prato com corte próprio da cozinha fria (bombom, carne do fondue,
+    # filé aperitivo) desconta o corte dele, não o porcionado comum. Só
+    # depois que o corte existe como produção: antes disso, fica o comum.
+    for ficha in fichas:
+        corte = porcionado_para(ficha["prato"], ficha["insumo"])
+        if corte and corte != ficha["insumo"] and tipo_atual.get(corte) == "producao":
+            ficha["insumo"] = corte
+            insumos[corte] = unidade_atual[corte]
+            tipos[corte] = "producao"
 
     # Insumo cru que já existe, mas contado numa unidade diferente da que a
     # ficha usa. Fica invisível e estraga a conta: a ficha gasta 0,06 kg de
@@ -872,7 +882,7 @@ def _rendimento_confiavel(receita: dict, avisos: list) -> float:
 # ---------- Gravação ----------
 
 def aplicar_plano(plano: dict, substituir_fichas: bool = True,
-                  corrigir_unidades: bool = True) -> dict:
+                  corrigir_unidades: bool = True, depois=None) -> dict:
     """Grava o plano no banco, tudo ou nada. Devolve a contagem do que foi feito.
 
     Com `substituir_fichas`, a ficha de cada prato e de cada produção da
@@ -882,6 +892,10 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
 
     O plano pode trazer `setor` ('cozinha' ou 'bar', ver bar_import.py):
     os pratos e as produções dele ficam marcados com esse setor.
+
+    `depois(conn)` roda dentro da mesma transação, antes do commit: é por
+    onde o bar grava o que só ele tem (mapeamento da Zig, produção que saiu).
+    O que ela devolver volta em 'depois'.
     """
     # Em lotes (crud._inserir_varias e cia.): linha a linha eram umas
     # trezentas idas ao banco na planilha do bar, cada uma cruzando dos EUA
@@ -966,6 +980,7 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
             sufixo="""ON CONFLICT(producao_id, insumo_id)
                       DO UPDATE SET quantidade_por_receita = excluded.quantidade_por_receita""",
         )
+        extra = depois(conn) if depois else None
         conn.commit()
     except Exception:
         conn.rollback()
@@ -980,4 +995,5 @@ def aplicar_plano(plano: dict, substituir_fichas: bool = True,
         "producoes": len(plano["producoes"]),
         "linhas_producao": linhas_producao,
         "unidades": len(plano.get("unidades_divergentes", [])) if corrigir_unidades else 0,
+        "depois": extra,
     }

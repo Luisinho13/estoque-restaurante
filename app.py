@@ -778,6 +778,113 @@ def _tabela_cobertura(dias: int):
     )
 
 
+DIAS_DA_SEMANA = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
+
+
+def _atalho(area, pagina, rotulo, icone):
+    """Link para outra tela, só se ela estiver liberada para quem entrou."""
+    if area in MINHAS_AREAS:
+        st.page_link(pagina, label=rotulo, icon=icone)
+
+
+def _tabela_curta(linhas, colunas, altura_por_linha=35, maximo=8):
+    """Tabela pequena, sem índice, que rola a partir de `maximo` linhas."""
+    df = pd.DataFrame(linhas)[list(colunas)].rename(columns=colunas)
+    st.dataframe(
+        df, hide_index=True, width="stretch",
+        height=min(len(df), maximo) * altura_por_linha + 38,
+        column_config={
+            "Saldo": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+
+
+def _painel_do_dia():
+    """O topo do dashboard: a rotina de hoje e o que pede ação.
+
+    Design, etapa 2 (pedido do usuário em 30/09/2026, aprovado o visual):
+    quem abre o sistema de manhã quer saber, sem procurar, se a venda de
+    ontem entrou, o que a cozinha precisa lançar e o que precisa comprar.
+    """
+    dia = crud.resumo_do_dia()
+    hoje = datetime.date.fromisoformat(dia["hoje"])
+    ontem = _data_br(dia["ontem"])[:5]
+    st.subheader(f"Hoje, {DIAS_DA_SEMANA[hoje.weekday()]} {hoje.strftime('%d/%m')}")
+
+    vendas = dia["vendas_ontem"]
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if vendas["total"]:
+            st.metric(
+                f"Venda de ontem ({ontem})", f"{vendas['total']:g} itens",
+                delta=f"{vendas['cozinha']:g} cozinha · {vendas['bar']:g} bar",
+                delta_color="off", delta_arrow="off", border=True,
+            )
+        elif dia["ontem_fechado"]:
+            st.metric(f"Venda de ontem ({ontem})", "Fechado", border=True,
+                      help="O dia foi marcado como sem movimento.")
+        else:
+            st.metric(f"Venda de ontem ({ontem})", "Falta lançar", delta="pendente",
+                      delta_color="inverse", delta_arrow="off", border=True)
+            _atalho("venda", PG_VENDA, "Lançar a venda", ":material/point_of_sale:")
+    negativas = len(dia["producoes_no_negativo"])
+    col2.metric(
+        "Produções lançadas hoje", dia["lancados_hoje"]["producoes"],
+        delta=f"{negativas} no negativo" if negativas else "nenhuma no negativo",
+        delta_color="inverse" if negativas else "normal", delta_arrow="off", border=True,
+        help="Produção no negativo: os pratos já gastaram e ela não foi lançada.",
+    )
+    col3.metric(
+        "Compras lançadas hoje", dia["lancados_hoje"]["compras"],
+        delta=f"{len(dia['comprar'])} para repor" if dia["comprar"] else "nada para repor",
+        delta_color="inverse" if dia["comprar"] else "normal", delta_arrow="off",
+        border=True,
+    )
+    if dia["dias_sem_contagem"] is None:
+        col4.metric("Última contagem", "nunca", border=True)
+    else:
+        quando = ("hoje" if dia["contou_hoje"]
+                  else f"há {dia['dias_sem_contagem']} d")
+        col4.metric(
+            "Última contagem", quando, delta=_data_br(dia["ultima_contagem"]),
+            delta_color="off", delta_arrow="off", border=True,
+            help="O ideal é reconciliar com uma contagem física 1x por mês.",
+        )
+
+    esquerda, direita = st.columns(2)
+    with esquerda.container(border=True):
+        st.markdown("**:material/soup_kitchen: Lançar produção**")
+        if dia["producoes_no_negativo"]:
+            st.caption(
+                "Os pratos já gastaram e a produção não foi lançada. Lance o que "
+                "foi feito, ou o saldo continua caindo."
+            )
+            _tabela_curta(dia["producoes_no_negativo"],
+                          {"insumo": "Produção", "estoque_atual": "Saldo",
+                           "unidade_medida": "Un."})
+            _atalho("producao", PG_PRODUCAO, "Lançar produção", ":material/soup_kitchen:")
+        else:
+            st.success("Nenhuma produção no negativo.", icon=":material/check_circle:")
+    with direita.container(border=True):
+        st.markdown("**:material/shopping_cart: Comprar ou conferir**")
+        if dia["comprar"]:
+            st.caption(
+                f"Negativo, abaixo do mínimo ou acabando em até "
+                f"{crud.DIAS_PARA_COMPRAR} dias pelo consumo da última semana. "
+                "Negativo costuma ser compra não lançada."
+            )
+            _tabela_curta(dia["comprar"],
+                          {"insumo": "Insumo", "estoque_atual": "Saldo",
+                           "unidade_medida": "Un.", "motivo": "Por quê"})
+        else:
+            st.success("Nada acabando nos próximos dias.", icon=":material/check_circle:")
+    if vendas["pratos"]:
+        with st.expander(f"O que mais saiu ontem ({ontem})", icon=":material/trophy:"):
+            _tabela_curta(vendas["pratos"][:10],
+                          {"prato": "Prato", "setor": "Setor", "quantidade": "Qtd."},
+                          maximo=10)
+
+
 def pagina_dashboard():
     _titulo("inventory", "Controle de Estoque")
     st.caption(
@@ -800,6 +907,10 @@ def pagina_dashboard():
                 st.switch_page(PG_FICHA)
         return
 
+    _painel_do_dia()
+
+    st.divider()
+    st.subheader("Análise do período")
     dias = st.segmented_control(
         "Período de análise",
         options=[7, 30, 90],
@@ -1693,7 +1804,9 @@ def _separar_cozinha_fria():
         "comprada continua como insumo, o porcionado vira um item à parte, os "
         "pratos passam a descontar o porcionado, e a peça sai quando o "
         "porcionamento é lançado em *Lançar Produção* (1 receita = 1 kg de "
-        "peça). A perda da limpeza deixa de sumir na contagem."
+        "peça). A perda da limpeza deixa de sumir na contagem. Bombom de "
+        "alcatra, carne do fondue, filé aperitivo e frango do fondue têm "
+        "produção própria, separada do porcionado comum da peça."
     )
     recado = st.session_state.pop("fria_recado", None)
     if recado:
@@ -1727,11 +1840,10 @@ def _separar_cozinha_fria():
         ]),
         hide_index=True, width="stretch",
     )
-    st.warning(
-        "O rendimento começa em **1 kg por kg de peça**, a definir: ninguém "
-        "informou quanto cada limpeza rende. Na hora de lançar, a cozinha "
-        "corrige *Quanto rendeu* com o peso da balança; o número fixo pode ser "
-        "ajustado em Ficha Técnica → Produção.",
+    st.info(
+        "O rendimento é **1 kg por kg de peça**: cada pacote feito é 1 kg. Se "
+        "a balança disser outra coisa, corrija *Quanto rendeu* na hora de "
+        "lançar; o número fixo fica em Ficha Técnica → Produção.",
         icon=":material/scale:",
     )
     trocas = plano["fichas_de_prato"] + plano["fichas_de_producao"]
@@ -1756,6 +1868,29 @@ def _separar_cozinha_fria():
                 ]),
                 hide_index=True, width="stretch",
             )
+    if plano["contagens_a_mover"]:
+        with st.expander(
+            f"O que já foi contado nessas linhas muda junto ({len(plano['contagens_a_mover'])})"
+        ):
+            st.caption(
+                "O total gravado de cada insumo nesses dias é refeito a partir "
+                "das linhas, para o corte novo começar com o que foi contado nele."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Dia": _data_br(data), "Linha": descricao, "Contado": quantidade,
+                     "Saía de": de, "Passa para": para}
+                    for data, descricao, quantidade, de, para in plano["contagens_a_mover"]
+                ]),
+                hide_index=True, width="stretch",
+            )
+    if plano["cortes_sem_prato"]:
+        st.warning(
+            "Nenhum prato cita " + ", ".join(f"**{c}**" for c in plano["cortes_sem_prato"])
+            + ". A produção é criada, mas só sai do estoque quando algum prato "
+            "a citar: acrescente na ficha do prato em Ficha Técnica.",
+            icon=":material/warning:",
+        )
     st.info(
         "Depois disto, **todo porcionamento precisa ser lançado** em Lançar "
         "Produção, como os molhos: sem ele, o porcionado vai para negativo "
@@ -1771,8 +1906,9 @@ def _separar_cozinha_fria():
         st.session_state["fria_recado"] = (
             f"{feito['producoes_criadas']} produção(ões) criada(s), "
             f"{feito['viraram_producao']} insumo(s) viraram produção, "
-            f"{feito['fichas_trocadas']} linha(s) de ficha trocada(s) e "
-            f"{feito['linhas_remapeadas']} linha(s) da contagem remapeada(s)."
+            f"{feito['fichas_trocadas']} linha(s) de ficha trocada(s), "
+            f"{feito['linhas_remapeadas']} linha(s) da contagem remapeada(s) e "
+            f"{feito['totais_refeitos']} total(is) contado(s) refeito(s)."
         )
         st.rerun()
 
@@ -1780,10 +1916,17 @@ def _separar_cozinha_fria():
 def _importar_ficha_do_bar():
     """A planilha do bar: drinks viram pratos do setor bar, preparos viram produção."""
     st.caption(
-        "A planilha de fichas do bar (Preparos bar villa). Cada aba de drink vira "
-        "um prato do bar, lançado na Venda do Dia; caldas, xarope e espuma viram "
-        "produção do bar. A dose da planilha está em litro e o estoque conta "
-        "garrafa e lata: a conversão usa o volume escrito no nome do insumo."
+        "A planilha de fichas do bar (*Ficha tecnica bar*, ou a *Preparos bar "
+        "villa* para as caldas, o xarope e a espuma). Cada aba de drink, dose, "
+        "garrafa, suco ou combo vira um prato do bar; caldas, xarope, espuma e "
+        "chocolate quente viram produção do bar. A dose da planilha está em "
+        "litro e o estoque conta garrafa e lata: a conversão usa o volume "
+        "escrito no nome do insumo. Garrafa e combo descontam a garrafa inteira."
+    )
+    st.caption(
+        "Junto com a planilha entram os **refrigerantes** da folha de contagem "
+        "(um prato por refrigerante, que desconta 1 unidade) e a ligação dos "
+        "produtos da Zig que ainda estão sem prato."
     )
     arquivo = st.file_uploader("Ficha do bar (drinks e preparos)", type=["xlsx"],
                                key="up_ficha_bar")
@@ -1801,6 +1944,37 @@ def _importar_ficha_do_bar():
         st.error("Não encontrei nenhuma ficha preenchida nessa planilha.")
         return
     _previa_e_gravacao(plano, "bar", ("ficha_planilha_bar",))
+
+
+def _extras_do_bar(plano):
+    """O que só a importação do bar faz: refrigerantes, Zig e o que saiu."""
+    if plano.get("refrigerantes"):
+        with st.expander(f"🥤 {len(plano['refrigerantes'])} refrigerante(s) da folha de contagem"):
+            st.caption(
+                "Cada um vira um prato do bar com o mesmo nome do insumo, que "
+                "desconta 1 unidade por venda. Coca lata e Coca Zero lata ficam "
+                "de fora: saíram da contagem."
+            )
+            st.write(", ".join(plano["refrigerantes"]))
+    if plano.get("zig"):
+        with st.expander(f"🔗 {len(plano['zig'])} produto(s) da Zig que passam a ter prato"):
+            st.caption(
+                "Hoje estão sem prato (marcados para não controlar). Depois "
+                "disto, a importação de vendas da Zig desconta o estoque deles."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Produto na Zig": z["nome_produto"], "SKU": z["sku"], "Prato": z["prato"]}
+                    for z in plano["zig"]
+                ]),
+                hide_index=True, width="stretch",
+            )
+    for producao in plano.get("remover", []):
+        st.warning(
+            f"**{producao['nome']}** será excluída ({producao['motivo']}), com a "
+            "receita e o que tiver sido lançado dela.",
+            icon=":material/delete:",
+        )
 
 
 def _importar_ficha_da_cozinha():
@@ -1918,6 +2092,9 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
             hide_index=True, width="stretch", height=300,
         )
 
+    if prefixo == "bar":
+        _extras_do_bar(plano)
+
     with st.expander(f"🍽️ {len(plano['pratos_novos'])} prato(s) que serão criados"):
         st.dataframe(pd.DataFrame({"Prato": plano["pratos_novos"]}),
                      hide_index=True, width="stretch")
@@ -1977,7 +2154,11 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
     if st.button("📥 Cadastrar tudo", type="primary", disabled=not confirmado,
                  key=f"{prefixo}_cadastrar"):
         try:
-            feito = ficha_import.aplicar_plano(plano, substituir, corrigir_unidades)
+            feito = ficha_import.aplicar_plano(
+                plano, substituir, corrigir_unidades,
+                depois=(lambda conn: bar_import.gravar_extras(conn, plano))
+                if prefixo == "bar" else None,
+            )
         except Exception as e:
             st.error(f"Erro ao gravar: {e}")
             return
@@ -1988,6 +2169,11 @@ def _previa_e_gravacao(plano, prefixo, chaves_para_limpar):
         )
         if feito["unidades"]:
             recado += f" {feito['unidades']} unidade(s) de medida corrigida(s)."
+        extras = feito.get("depois") or {}
+        if extras.get("zig"):
+            recado += f" {extras['zig']} produto(s) da Zig ligado(s) a prato."
+        if extras.get("removidos"):
+            recado += f" {extras['removidos']} produção(ões) que saíram excluída(s)."
         st.success(recado)
         for chave_sessao in chaves_para_limpar:
             st.session_state.pop(chave_sessao, None)
@@ -2904,6 +3090,19 @@ def _importar_planilha_de_contagem():
             ),
             icon=":material/straighten:",
         )
+    if plano["renomear"]:
+        st.info(
+            "Estas linhas trocam de nome, e o que já foi contado nelas vai junto: "
+            + "; ".join(
+                f"{r['de']} → {r['para']}"
+                + (f" (junta com o '{r['insumo_para']}' que a ficha do bar criou)"
+                   if r.get("funde")
+                   else f" (o insumo passa a se chamar '{r['insumo_para']}')"
+                   if r["renomeia_insumo"] else f" (passa para '{r['insumo_para']}')")
+                for r in plano["renomear"]
+            ),
+            icon=":material/edit:",
+        )
     if plano["saem"]:
         with st.expander(f"Linhas que saem da contagem ({len(plano['saem'])})"):
             st.caption(
@@ -2919,11 +3118,22 @@ def _importar_planilha_de_contagem():
             + ", ".join(f["descricao"] for f in plano["ficam"]),
             icon=":material/history:",
         )
-    if plano["insumos_sem_linha"]:
+    com_historico = [n for n in plano["insumos_sem_linha"] if n not in plano["excluiveis"]]
+    if com_historico:
         st.caption(
             "Estes insumos ficam sem nenhuma linha na planilha e passam para a "
-            "seção *Fora da planilha* da contagem. Se não existem mais, dá para "
-            "excluir na tela de Insumos: " + ", ".join(plano["insumos_sem_linha"])
+            "seção *Fora da planilha* da contagem. Como têm histórico, não são "
+            "excluídos aqui; se não existem mais, dá para excluir na tela de "
+            "Insumos: " + ", ".join(com_historico)
+        )
+    excluir_sem_linha = False
+    if plano["excluiveis"]:
+        excluir_sem_linha = st.checkbox(
+            "Excluir também os insumos que ficam sem linha e não têm histórico "
+            "nenhum (nem compra, contagem, ficha ou nota): "
+            + ", ".join(plano["excluiveis"]),
+            value=True, key="contagem_excluir_sem_linha",
+            help="Sem isso, eles continuam aparecendo em 'Fora da planilha' na contagem.",
         )
     if plano["insumos_novos"]:
         with st.expander(f"Insumos que serão criados ({len(plano['insumos_novos'])})"):
@@ -2944,18 +3154,21 @@ def _importar_planilha_de_contagem():
 
     if st.button("📥 Importar planilha", type="primary", key="contagem_importar"):
         try:
-            resultado = contagem_import.aplicar_plano(plano)
+            resultado = contagem_import.aplicar_plano(plano, excluir_sem_linha)
         except Exception as e:
             st.error(f"Nada foi gravado: {e}")
             return
-        st.success(
+        recado = (
             f"{resultado['insumos_criados']} insumo(s) criado(s), "
             f"{resultado['unidades_corrigidas']} unidade(s) trocada(s), "
             f"{resultado['itens_criados']} linha(s) nova(s), "
-            f"{resultado['itens_atualizados']} atualizada(s) e "
-            f"{resultado['itens_removidos']} removida(s).",
-            icon=":material/check_circle:",
+            f"{resultado['itens_atualizados']} atualizada(s), "
+            f"{resultado['linhas_renomeadas']} renomeada(s) e "
+            f"{resultado['itens_removidos']} removida(s)."
         )
+        if resultado["insumos_excluidos"]:
+            recado += f" {resultado['insumos_excluidos']} insumo(s) sem histórico excluído(s)."
+        st.success(recado, icon=":material/check_circle:")
 
 
 def pagina_itens_contagem():
@@ -3564,7 +3777,7 @@ def pagina_producao():
     item = por_nome[producao]
     unidade = item["unidade_medida"]
 
-    if producao in cozinha_fria.PORCIONADOS.values():
+    if producao in cozinha_fria.PORCIONADOS:
         st.caption(
             "Porcionamento: **1 receita = 1 kg de peça**. Em *Quantas receitas*, "
             "os kg de peça que foram limpos; em *Quanto rendeu*, o peso do "

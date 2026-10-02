@@ -136,7 +136,12 @@ não olhar.
   lança como qualquer produção — quantos kg de peça foram limpos e quanto
   ficou pronto — e a diferença, a perda da limpeza, passa a ter nome e
   data em vez de sumir na contagem. Separado num clique, com prévia, a
-  partir das linhas da planilha de contagem
+  partir das linhas da planilha de contagem. Os cortes que a cozinha
+  porciona juntos e não quer misturar — **bombom de alcatra, carne do
+  fondue, filé aperitivo e frango do fondue** — têm produção própria: o
+  prato desses cortes desconta o corte, os outros pratos o porcionado
+  comum da peça. O que já tinha sido contado na linha de cada corte vai
+  junto com ela
 
 **Correções e baixas**
 - **Baixa de Estoque**: o que sai sem ser venda nem produção — a garrafa
@@ -163,13 +168,19 @@ não olhar.
   gravado antes da prévia, que mostra o que vai ser criado e cada ponto
   em que a planilha estava ambígua. Depois da primeira carga, a fonte da
   verdade é o sistema, e reimportar avisa que sobrescreve o editado
-- **Ficha do bar**, na mesma tela, em aba própria: cada drink da planilha
-  do bar vira um prato do setor bar, e caldas, xarope e espuma viram
-  produção do bar. A planilha dá a dose em litro (50 ml de gin) e o
-  estoque conta a garrafa; a conversão usa o volume escrito no nome do
-  insumo, então 50 ml de "Gin Bombay 750 ml" descontam 0,067 garrafa.
-  Onde o nome não diz o volume, ou a erva é contada em maço, a quantidade
-  entra como está e a prévia avisa — o sistema não chuta peso de maço
+- **Ficha do bar**, na mesma tela, em aba própria: cada aba da planilha
+  do bar — drink, dose e garrafa de destilado, combo, café, suco, jarra —
+  vira um prato do setor bar, e caldas, xarope, espuma e a panela de
+  chocolate quente viram produção do bar. A planilha dá a dose em litro
+  (50 ml de gin) e o estoque conta a garrafa; a conversão usa o volume
+  escrito no nome do insumo, então 50 ml de "Gin Bombay 750 ml" descontam
+  0,067 garrafa. Garrafa e combo descontam a garrafa inteira, e o que a
+  planilha marca como unidade é contado em unidade (seis Heineken no
+  balde). Onde o nome não diz o volume, ou a erva é contada em maço, a
+  quantidade entra como está e a prévia avisa — o sistema não chuta peso
+  de maço. Junto entram os **refrigerantes** da folha de contagem, um
+  prato por lata ou garrafa, e os produtos da Zig que ainda estavam sem
+  prato passam a apontar para o drink, o suco ou o refrigerante deles
 
 **Saídas de estoque**
 - Importação das vendas do **PDV (Zig)** a partir da planilha exportada:
@@ -201,8 +212,14 @@ não olhar.
   venda lançada**, que é a falha que o lançamento manual produz sem dar
   erro nenhum. Separa a **saída do bar** da saída da cozinha: a do bar é o
   que os drinks vendidos e os preparos do bar tiraram do estoque
-- **Dashboard** com indicadores do período, consumo por insumo, curva de
-  vendas por dia, ranking de pratos e movimentações recentes
+- **Dashboard que abre pelo dia**: se a venda de ontem foi lançada (e
+  quanto foi da cozinha e do bar), o que já entrou hoje, há quantos dias
+  foi a última contagem — e as duas listas que pedem ação: as
+  **produções no negativo** (o molho e o porcionado que os pratos já
+  gastaram e ninguém lançou) e o que **comprar ou conferir** (negativo,
+  abaixo do mínimo ou acabando em até três dias pelo consumo da última
+  semana). Embaixo, a análise do período: consumo por insumo, curva de
+  vendas, ranking de pratos e movimentações recentes
 - **"O que acaba primeiro"**: estimativa de em quantos dias cada insumo
   acaba (estoque ÷ consumo médio diário), com semáforo de status. É a
   tela que responde o que precisa ser comprado antes de faltar
@@ -223,7 +240,10 @@ não olhar.
   e é onde se preenche o fator das linhas cujo peso a planilha não diz.
   Reimportar uma versão nova da planilha tira da contagem as linhas que
   saíram dela, e as colunas são achadas pelo cabeçalho, onde quer que
-  estejam
+  estejam. O chopp é contado em litro, um por marca: os barris de 30 e de
+  50 litros da mesma marca viram uma linha só, com os litros somados. O
+  insumo que fica sem linha e sem histórico nenhum pode ser excluído na
+  mesma importação, para não sobrar na contagem como "fora da planilha"
 - **Estoque mínimo em lote**, na tela de Insumos: é o mínimo que liga o
   semáforo do painel e o alerta de reposição. Definido um a um, em mais de
   cem insumos, não é definido nunca — e sem ele o sistema só conta o
@@ -679,6 +699,22 @@ Agora a nota entra inteira, com o número, e a segunda vez pede
 confirmação — a mesma trava que a nota digitada à mão já tinha. E toda
 compra, produção e baixa pode ser apagada em *Corrigir Lançamentos*.
 
+### O estoque que durava sete vezes mais
+
+O "acaba em" do dashboard divide o estoque pelo consumo médio diário. A
+média era o consumo do período dividido pelo tamanho do período — 30
+dias. Com o sistema em uso havia quatro dias, o consumo de quatro dias
+era dividido por trinta: a média saía sete vezes menor que a real, e o
+insumo que acabava amanhã aparecia com uma semana de folga. Nenhum erro,
+só um número calmo demais.
+
+Agora a média divide pelos dias em que o sistema já estava em uso dentro
+do período (a primeira contagem ou venda marca o começo). Nos primeiros
+dias ela oscila mais, mas aponta para o lado certo.
+
+A lição: um período de 30 dias pressupõe 30 dias de dado. No começo de
+qualquer sistema, essa premissa é falsa por definição.
+
 ### O fio que liga todos
 
 Nenhum desses problemas deu mensagem de erro. O estoque errado, o
@@ -844,6 +880,37 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.14 — O dia na primeira tela, o bar inteiro e os cortes da cozinha fria
+
+- **Dashboard pelo dia.** A primeira tela agora diz o que fazer hoje: a
+  venda de ontem (ou "falta lançar", com o atalho), as produções e
+  compras lançadas hoje, a última contagem, as produções no negativo e o
+  que comprar ou conferir. A análise do período continua embaixo
+- **Ficha técnica do bar completa.** A importação lê a *Ficha tecnica
+  bar* (174 abas): além dos 46 drinks, as doses e garrafas de cada
+  destilado, os combos com energético, cafés, sucos, jarras, chopp e o
+  chocolate quente. Nos 18 drinks em que ela diverge da *Preparos*, vale
+  ela (escolha do usuário). As abas repetidas ou de cópia ficam de fora e
+  aparecem na prévia
+- **Refrigerantes e Zig.** Cada refrigerante, energético e tônica da
+  folha de contagem vira um prato que desconta 1 unidade, e 31 produtos
+  da Zig que estavam sem prato (refrigerantes, chopp, sucos, jarras)
+  passam a ter o seu
+- **Conde de Campos sai**: não é mais vendido, e a produção dele é
+  excluída na importação
+- **Cozinha fria com cortes próprios**: bombom de alcatra, carne do
+  fondue, filé aperitivo e frango do fondue viram produções separadas do
+  porcionado comum. O rendimento fica em 1 kg por kg de peça (cada pacote
+  é 1 kg, confirmado). A contagem já gravada nessas linhas muda de
+  insumo junto, e reimportar a ficha da cozinha não desfaz a separação
+- **Contagem**: chopp Heineken e chopp Amstel, uma linha cada, em litro
+  (os barris de 30 e 50 L somados); Coca lata e Coca Zero lata saíram da
+  contagem. Insumo que perde a última linha e não tem histórico pode ser
+  excluído na própria importação
+- **Correção**: o "acaba em" dividia o consumo por 30 dias mesmo com
+  poucos dias de uso, e prometia estoque para muito mais tempo do que
+  havia
 
 ### v0.13.1 — Cara nova
 

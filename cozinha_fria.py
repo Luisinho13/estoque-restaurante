@@ -29,6 +29,14 @@ Ficaram de fora, de propósito: o que chega pronto do fornecedor (truta em
 filé, porterhouse, tomahawk, mini hambúrguer), o camarão 11/15 (a linha
 "câmara 3/cozinha" não diz se é porcionado) e o frango de uso da equipe.
 
+**Cortes com produção própria** (pedido do usuário em 02/10/2026): o
+bombom de alcatra, a carne do fondue, o filé aperitivo e o frango do
+fondue saem da mesma peça que o porcionado comum, mas a cozinha porciona
+tudo junto e "pode dar confusão". Cada um virou uma produção à parte. O
+prato que é desse corte (`CORTES_POR_PRATO`) desconta a produção dele; os
+outros continuam no porcionado comum da peça. O rendimento segue 1 kg por
+kg de peça: cada pacote feito é 1 kg (confirmado pelo usuário em 02/10).
+
 Nada aqui grava sozinho: `montar_plano()` diz o que muda e
 `aplicar_plano()` grava, tudo ou nada. Rodar de novo não duplica nada.
 """
@@ -36,8 +44,25 @@ Nada aqui grava sozinho: `montar_plano()` diz o que muda e
 from database import get_connection
 from ficha_import import chave
 
-# Insumo cru (a peça) → produção (o porcionado).
+# Produção (o porcionado) → insumo cru (a peça) que ela consome.
 PORCIONADOS = {
+    "Alcatra porcionada": "Alcatra",
+    "Bombom de alcatra porcionado": "Alcatra",
+    "Carne fondue porcionada": "Alcatra",
+    "Mignon porcionado": "Mignon",
+    "Filé aperitivo porcionado": "Mignon",
+    "Chorizo porcionado": "Chorizo",
+    "Costela porcionada": "Costela",
+    "Barriga de porco porcionada": "Barriga de porco",
+    "Frango porcionado": "Frango",
+    "Frango fondue porcionado": "Frango",
+    "Camarão sete barbas porcionado": "Camarão sete barbas",
+    "Salmão porcionado": "Salmão",
+}
+
+# O porcionado comum de cada peça: é ele que o prato desconta quando não
+# tem corte próprio.
+GERAL = {
     "Alcatra": "Alcatra porcionada",
     "Mignon": "Mignon porcionado",
     "Chorizo": "Chorizo porcionado",
@@ -48,14 +73,25 @@ PORCIONADOS = {
     "Salmão": "Salmão porcionado",
 }
 
+# Corte próprio: (começo do nome do prato, por `chave`, e a peça que ele
+# cita) → produção. A peça entra na chave porque a sequência de fondue leva
+# dois cortes, a carne e o frango.
+CORTES_POR_PRATO = {
+    ("bombom de alcatra", "Alcatra"): "Bombom de alcatra porcionado",
+    ("fondue de carne", "Alcatra"): "Carne fondue porcionada",
+    ("sequencia de fondue", "Alcatra"): "Carne fondue porcionada",
+    ("sequencia de fondue", "Frango"): "Frango fondue porcionado",
+    ("file aperitivo", "Mignon"): "Filé aperitivo porcionado",
+}
+
 # Linhas da planilha de contagem que são o porcionado. As outras linhas
 # desses insumos são a peça e continuam no cru.
 LINHAS_PORCIONADAS = {
-    "BOMBOM DE ALCATRA (PORCIONADO)": "Alcatra porcionada",
+    "BOMBOM DE ALCATRA (PORCIONADO)": "Bombom de alcatra porcionado",
     "MIOLO/ CORAÇÃO DE ALCATRA PORCIONADO (CAMERA - 3) PORÇÃO 180gr": "Alcatra porcionada",
     "MIOLO/ CORAÇÃO DE ALCATRA PORCIONADO (COZINHA) PARMEGIANA": "Alcatra porcionada",
     "FILET MIGNON PORCIONADO ( GARDE) ESCALOPE / TORNEDOR": "Mignon porcionado",
-    "FILET MIGNON PORCIONADO (CAMERA - 3 - FILE APERITIVO) PORÇÃO 280GR": "Mignon porcionado",
+    "FILET MIGNON PORCIONADO (CAMERA - 3 - FILE APERITIVO) PORÇÃO 280GR": "Filé aperitivo porcionado",
     "FILET MIGNON PORCIONADO BIFE P/ PARMEGIANA 160gr (GARDE)": "Mignon porcionado",
     "FILET MIGNON PORCIONADO STEAK TARTARE": "Mignon porcionado",
     "FILET MIGNON PORCIONADO ISCA DE MIGNON": "Mignon porcionado",
@@ -65,7 +101,7 @@ LINHAS_PORCIONADAS = {
     "PEITO DE FRANGO PORCIONADO (GOURMET)": "Frango porcionado",
     "PEITO DE FRANGO PORCIONADO - ISCAS (FRANGO GOURMET) / (CAMARA 3)": "Frango porcionado",
     "PEITO DE FRANGO PORCIONADO - KIDS": "Frango porcionado",
-    "PEITO DE FRANGO PORCIONADO FONDUE (CAMERA - 3)": "Frango porcionado",
+    "PEITO DE FRANGO PORCIONADO FONDUE (CAMERA - 3)": "Frango fondue porcionado",
     "PEITO DE FRANGO PORCIONADO PARMEGIANA(GARDE)": "Frango porcionado",
     "CAMARÃO 7 BARBA PORCIONADO (CÂMARA 3 / COZINHA)": "Camarão sete barbas porcionado",
     "SALMÃO PORCIONADO (CÂMARA 3 / COZINHA)": "Salmão porcionado",
@@ -82,14 +118,34 @@ def porcionado_de(descricao: str) -> str | None:
     return _LINHAS.get(chave(descricao))
 
 
+def porcionado_para(prato: str, insumo: str) -> str | None:
+    """O porcionado que `prato` deve descontar no lugar de `insumo`.
+
+    `insumo` pode ser a peça ou um porcionado dela. O prato com corte
+    próprio (`CORTES_POR_PRATO`) fica com o corte; os outros, com o
+    porcionado comum. None quando o insumo não é carne da cozinha fria.
+    """
+    peca = insumo if insumo in GERAL else PORCIONADOS.get(insumo)
+    if peca is None:
+        return None
+    nome = chave(prato)
+    for (comeco, da_peca), producao in CORTES_POR_PRATO.items():
+        if da_peca == peca and nome.startswith(comeco):
+            return producao
+    return GERAL[peca]
+
+
 def montar_plano() -> dict:
     """O que muda no banco, sem gravar nada.
 
     Devolve:
-    - 'producoes': [{nome, peca, existe, tipo_atual}] — as oito produções;
-    - 'fichas_de_prato': [(prato, cru, produção, quantidade)] a trocar;
-    - 'fichas_de_producao': [(receita, cru, produção, quantidade)] a trocar;
+    - 'producoes': [{nome, peca, existe, tipo_atual}] — as produções;
+    - 'fichas_de_prato': [(prato, de, para, quantidade)] a trocar;
+    - 'fichas_de_producao': [(receita, de, para, quantidade)] a trocar;
     - 'linhas_da_contagem': [(descrição, de, para)] a remapear;
+    - 'contagens_a_mover': [(data, descrição, quantidade, de, para)] — o que
+      já foi contado nessas linhas, e que muda de insumo junto com elas;
+    - 'cortes_sem_prato': corte próprio que nenhum prato cita;
     - 'problemas': o que impede de gravar.
     """
     conn = get_connection()
@@ -112,20 +168,26 @@ def montar_plano() -> dict:
              JOIN insumos i ON i.id = f.insumo_id"""
     ).fetchall()
     linhas = conn.execute(
-        """SELECT ic.id, ic.descricao, i.nome AS insumo,
-                  EXISTS (SELECT 1 FROM contagens_itens x WHERE x.item_id = ic.id) AS contado
+        """SELECT ic.id, ic.descricao, i.nome AS insumo
              FROM itens_contagem ic JOIN insumos i ON i.id = ic.insumo_id"""
+    ).fetchall()
+    contadas = conn.execute(
+        """SELECT ci.data, ic.descricao, ci.quantidade
+             FROM contagens_itens ci JOIN itens_contagem ic ON ic.id = ci.item_id
+            ORDER BY ci.data, ic.descricao"""
     ).fetchall()
     conn.close()
 
     problemas = []
-    producoes = []
-    for peca, nome in PORCIONADOS.items():
+    for peca in GERAL:
         if peca not in insumos:
             problemas.append(f"O insumo '{peca}' não existe.")
-            continue
-        if insumos[peca]["unidade_medida"] != "kg":
+        elif insumos[peca]["unidade_medida"] != "kg":
             problemas.append(f"'{peca}' não está em kg, e o porcionamento é por kg de peça.")
+    producoes = []
+    for nome, peca in PORCIONADOS.items():
+        if peca not in insumos:
+            continue
         atual = insumos.get(nome)
         if atual and atual["unidade_medida"] != "kg":
             problemas.append(f"'{nome}' já existe em '{atual['unidade_medida']}', e não em kg.")
@@ -135,14 +197,16 @@ def montar_plano() -> dict:
             "tipo_atual": atual["tipo"] if atual else None,
         })
 
-    # Quem já cita o porcionado não pode citar a peça também: a ficha tem
+    # Quem já cita o destino não pode citar a origem também: a ficha tem
     # um insumo por linha, e a troca faria duas linhas iguais.
     def trocas(fichas, pular):
         ja_cita = {(f["dono"], f["insumo"]) for f in fichas}
         saida = []
         for f in fichas:
-            destino = PORCIONADOS.get(f["insumo"])
-            if destino is None or f["dono"] in pular:
+            if f["dono"] in pular:
+                continue
+            destino = porcionado_para(f["dono"], f["insumo"])
+            if destino is None or destino == f["insumo"]:
                 continue
             if (f["dono"], destino) in ja_cita:
                 problemas.append(
@@ -154,29 +218,38 @@ def montar_plano() -> dict:
         return saida
 
     fichas_de_prato = trocas(fichas_prato, set())
-    # A receita do próprio porcionado é a que consome a peça: fica.
-    fichas_de_producao = trocas(fichas_producao, set(PORCIONADOS.values()))
+    # A receita do próprio porcionado é a que consome a peça: fica. Receita
+    # de outra produção não tem corte próprio e cai no porcionado comum.
+    fichas_de_producao = trocas(fichas_producao, set(PORCIONADOS))
 
     linhas_da_contagem = []
     for linha in linhas:
         destino = porcionado_de(linha["descricao"])
         if destino is None or linha["insumo"] == destino:
             continue
-        if linha["contado"]:
-            problemas.append(
-                f"A linha '{linha['descricao']}' já tem contagem gravada como "
-                f"'{linha['insumo']}'. Apague essa contagem antes (Contagem Física) "
-                "e grave de novo depois: senão o total gravado não bate mais com "
-                "as linhas."
-            )
-            continue
         linhas_da_contagem.append((linha["descricao"], linha["insumo"], destino))
+
+    # A linha que muda de insumo leva junto o que já foi contado nela: o
+    # total gravado de cada insumo naquele dia é refeito a partir das linhas.
+    mudam = {descricao: (de, para) for descricao, de, para in linhas_da_contagem}
+    contagens_a_mover = [
+        (c["data"], c["descricao"], c["quantidade"], *mudam[c["descricao"]])
+        for c in contadas if c["descricao"] in mudam
+    ]
+
+    citados = {f["insumo"] for f in fichas_prato}
+    citados |= {para for _, _, para, _ in fichas_de_prato}
+    cortes_sem_prato = sorted(
+        corte for corte in set(CORTES_POR_PRATO.values()) if corte not in citados
+    )
 
     return {
         "producoes": producoes,
         "fichas_de_prato": fichas_de_prato,
         "fichas_de_producao": fichas_de_producao,
         "linhas_da_contagem": linhas_da_contagem,
+        "contagens_a_mover": contagens_a_mover,
+        "cortes_sem_prato": cortes_sem_prato,
         "problemas": problemas,
     }
 
@@ -197,7 +270,7 @@ def aplicar_plano(plano: dict) -> dict:
     receita só é criada se a produção ainda não tiver uma: a cozinha pode
     ter corrigido o rendimento na Ficha Técnica.
     """
-    from crud import _atualizar_linhas, _inserir_varias
+    from crud import _atualizar_linhas, _inserir_varias, refazer_totais_contados
 
     if plano["problemas"]:
         raise ValueError("Há problemas a resolver antes de gravar.")
@@ -259,6 +332,12 @@ def aplicar_plano(plano: dict) -> dict:
             {itens[descricao]: (ids[destino],)
              for descricao, _, destino in plano["linhas_da_contagem"]},
         )
+        refeitos = refazer_totais_contados(
+            conn,
+            {ids[nome] for _, de, para in plano["linhas_da_contagem"] for nome in (de, para)},
+            sorted({data for data, *_ in plano.get("contagens_a_mover", [])}),
+            "total refeito na separação da cozinha fria",
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -271,4 +350,5 @@ def aplicar_plano(plano: dict) -> dict:
         "receitas_criadas": len(receitas),
         "fichas_trocadas": len(plano["fichas_de_prato"]) + len(plano["fichas_de_producao"]),
         "linhas_remapeadas": len(plano["linhas_da_contagem"]),
+        "totais_refeitos": refeitos,
     }
