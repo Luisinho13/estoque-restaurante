@@ -907,7 +907,9 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   fondue, filé aperitivo e frango do fondue viram produções separadas do
   porcionado comum. O rendimento fica em 1 kg por kg de peça (cada pacote
   é 1 kg, confirmado), e o corte nasce com a receita do porcionado comum
-  da peça como está no sistema (a alcatra sai do Baby Beef). A contagem já
+  da peça como está no sistema (a alcatra sai do Baby Beef). A sequência
+  de fondue passa a levar 180 g de frango, que a planilha da cozinha não
+  citava, e a peça do bombom é contada como Baby Beef. A contagem já
   gravada nessas linhas muda de insumo junto, e reimportar a ficha da
   cozinha não desfaz a separação
 - **Contagem**: chopp Heineken e chopp Amstel, uma linha cada, em litro

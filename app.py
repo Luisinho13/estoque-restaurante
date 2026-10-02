@@ -1885,6 +1885,14 @@ def _separar_cozinha_fria():
                 ]),
                 hide_index=True, width="stretch",
             )
+    if plano.get("fichas_acrescentadas"):
+        st.info(
+            "Passam a levar: " + "; ".join(
+                f"**{prato}** — {quantidade:g} kg de {producao}"
+                for prato, producao, quantidade in plano["fichas_acrescentadas"]
+            ),
+            icon=":material/add_circle:",
+        )
     if plano["cortes_sem_prato"]:
         st.warning(
             "Nenhum prato cita " + ", ".join(f"**{c}**" for c in plano["cortes_sem_prato"])
@@ -1908,6 +1916,7 @@ def _separar_cozinha_fria():
             f"{feito['producoes_criadas']} produção(ões) criada(s), "
             f"{feito['viraram_producao']} insumo(s) viraram produção, "
             f"{feito['fichas_trocadas']} linha(s) de ficha trocada(s), "
+            f"{feito['fichas_acrescentadas']} acrescentada(s), "
             f"{feito['linhas_remapeadas']} linha(s) da contagem remapeada(s) e "
             f"{feito['totais_refeitos']} total(is) contado(s) refeito(s)."
         )

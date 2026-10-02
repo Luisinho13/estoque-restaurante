@@ -87,6 +87,22 @@ CORTES_POR_PRATO = {
     ("file aperitivo", "Mignon"): "Filé aperitivo porcionado",
 }
 
+# Corte que a ficha da planilha da cozinha não cita e que o prato leva:
+# (começo do nome do prato, por `chave`) → [(produção, kg por prato)].
+# A sequência de fondue leva 180 g de frango (usuário, 02/10/2026); a
+# planilha só tinha a carne.
+ACRESCIMOS = {
+    "sequencia de fondue": [("Frango fondue porcionado", 0.18)],
+}
+
+
+def acrescimos_do_prato(prato: str) -> list[tuple]:
+    """Os cortes que `prato` leva além do que a planilha da cozinha diz."""
+    nome = chave(prato)
+    return [item for comeco, itens in ACRESCIMOS.items()
+            if nome.startswith(comeco) for item in itens]
+
+
 # Linhas da planilha de contagem que são o porcionado. As outras linhas
 # desses insumos são a peça e continuam no cru.
 LINHAS_PORCIONADAS = {
@@ -148,6 +164,8 @@ def montar_plano() -> dict:
     - 'linhas_da_contagem': [(descrição, de, para)] a remapear;
     - 'contagens_a_mover': [(data, descrição, quantidade, de, para)] — o que
       já foi contado nessas linhas, e que muda de insumo junto com elas;
+    - 'fichas_acrescentadas': [(prato, produção, quantidade)] que o prato
+      passa a levar (`ACRESCIMOS`);
     - 'cortes_sem_prato': corte próprio que nenhum prato cita;
     - 'problemas': o que impede de gravar.
     """
@@ -251,8 +269,18 @@ def montar_plano() -> dict:
         for c in contadas if c["descricao"] in mudam
     ]
 
+    ja_leva = {(f["dono"], f["insumo"]) for f in fichas_prato}
+    ja_leva |= {(dono, para) for dono, _, para, _ in fichas_de_prato}
+    fichas_acrescentadas = sorted(
+        (prato, producao, quantidade)
+        for prato in {f["dono"] for f in fichas_prato}
+        for producao, quantidade in acrescimos_do_prato(prato)
+        if (prato, producao) not in ja_leva
+    )
+
     citados = {f["insumo"] for f in fichas_prato}
     citados |= {para for _, _, para, _ in fichas_de_prato}
+    citados |= {producao for _, producao, _ in fichas_acrescentadas}
     cortes_sem_prato = sorted(
         corte for corte in set(CORTES_POR_PRATO.values()) if corte not in citados
     )
@@ -263,6 +291,7 @@ def montar_plano() -> dict:
         "fichas_de_producao": fichas_de_producao,
         "linhas_da_contagem": linhas_da_contagem,
         "contagens_a_mover": contagens_a_mover,
+        "fichas_acrescentadas": fichas_acrescentadas,
         "cortes_sem_prato": cortes_sem_prato,
         "problemas": problemas,
     }
@@ -272,7 +301,7 @@ def ha_o_que_fazer(plano: dict) -> bool:
     return bool(
         any(not p["existe"] or p["tipo_atual"] != "producao" for p in plano["producoes"])
         or plano["fichas_de_prato"] or plano["fichas_de_producao"]
-        or plano["linhas_da_contagem"]
+        or plano["linhas_da_contagem"] or plano.get("fichas_acrescentadas")
     )
 
 
@@ -332,6 +361,11 @@ def aplicar_plano(plano: dict) -> dict:
                 "UPDATE ficha_tecnica SET insumo_id = ? WHERE prato_id = ? AND insumo_id = ?",
                 (ids[destino], pratos[dono], ids[cru]),
             )
+        _inserir_varias(
+            conn, "ficha_tecnica", ("prato_id", "insumo_id", "quantidade_por_prato"),
+            [(pratos[prato], ids[producao], quantidade)
+             for prato, producao, quantidade in plano.get("fichas_acrescentadas", [])],
+        )
         for dono, cru, destino, _ in plano["fichas_de_producao"]:
             conn.execute(
                 "UPDATE ficha_producao SET insumo_id = ? WHERE producao_id = ? AND insumo_id = ?",
@@ -364,6 +398,7 @@ def aplicar_plano(plano: dict) -> dict:
         "viraram_producao": len(viraram),
         "receitas_criadas": len(receitas),
         "fichas_trocadas": len(plano["fichas_de_prato"]) + len(plano["fichas_de_producao"]),
+        "fichas_acrescentadas": len(plano.get("fichas_acrescentadas", [])),
         "linhas_remapeadas": len(plano["linhas_da_contagem"]),
         "totais_refeitos": refeitos,
     }

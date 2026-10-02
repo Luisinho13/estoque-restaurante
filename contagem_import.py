@@ -274,7 +274,9 @@ ALIMENTOS = {
     "APARAS DE CARNE KG (CAMERA - 3) PARA MOLHO": _i("Apara de carne", 1, "kg"),
     "BARRIGA DE PORCO": _i("Barriga de porco", 1, "kg"),
     "BARRIGA DE PORCO PORCIONADO": _i("Barriga de porco", 1, "kg"),
-    "BOMBOM DE ALCATRA (BABY BEEF PEÇA)": _i("Alcatra", 1, "kg"),
+    # A peça do bombom é o Baby Beef, que a casa compra com esse nome e
+    # que a receita da alcatra porcionada consome (usuário, 02/10/2026).
+    "BOMBOM DE ALCATRA (BABY BEEF PEÇA)": _i("Baby Beef", 1, "kg"),
     "BOMBOM DE ALCATRA (PORCIONADO)": _i("Alcatra", 1, "kg"),
     "CARNE PARA HAMBURGUER": _i("Hambúrguer", 1, "kg"),
     "CARNE SECA": _i("Carne seca", 1, "kg"),

@@ -561,7 +561,7 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
     Aba sem correspondência vira prato novo com o nome da própria ficha.
     """
     # Aqui dentro para não virar importação circular: cozinha_fria usa `chave`.
-    from cozinha_fria import GERAL, porcionado_para
+    from cozinha_fria import GERAL, acrescimos_do_prato, porcionado_para
 
     de_para_pratos = de_para_pratos or {}
     avisos = []
@@ -786,6 +786,16 @@ def montar_plano(receitas_prato: list[dict], receitas_producao: list[dict],
             ficha["insumo"] = corte
             insumos[corte] = unidade_atual[corte]
             tipos[corte] = "producao"
+    # E o corte que a planilha não cita e o prato leva (o frango da
+    # sequência de fondue): sem isto, reimportar apagaria a linha.
+    for prato in sorted({f["prato"] for f in fichas}):
+        tem = {f["insumo"] for f in fichas if f["prato"] == prato}
+        for corte, quantidade in acrescimos_do_prato(prato):
+            if corte not in tem and tipo_atual.get(corte) == "producao":
+                fichas.append({"prato": prato, "insumo": corte, "quantidade": quantidade,
+                               "aba": "cozinha fria"})
+                insumos[corte] = unidade_atual[corte]
+                tipos[corte] = "producao"
 
     # Insumo cru que já existe, mas contado numa unidade diferente da que a
     # ficha usa. Fica invisível e estraga a conta: a ficha gasta 0,06 kg de
