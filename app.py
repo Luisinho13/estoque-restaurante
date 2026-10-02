@@ -3486,6 +3486,62 @@ def _apagar_contagem(data_iso, chave):
             st.rerun()
 
 
+def _ir_para_secao(opcoes, passo):
+    """Botão de seção anterior/próxima. Roda como callback, antes da tela,
+    porque o seletor de seção já existe quando o botão é clicado."""
+    atual = st.session_state.get("contagem_secao", opcoes[0])
+    i = opcoes.index(atual) if atual in opcoes else 0
+    st.session_state["contagem_secao"] = opcoes[max(0, min(len(opcoes) - 1, i + passo))]
+
+
+def _progresso_da_contagem(lugar, linhas, valores, secao):
+    """Quanto da planilha já foi contado, no geral e por seção.
+
+    Design, etapa 2 (combinada em 30/09/2026): a contagem tem quase
+    seiscentas linhas em umas trinta seções, e quem conta precisa saber
+    onde parou. É desenhado em `lugar`, um espaço reservado acima da
+    tabela, mas só depois dela: assim o número já inclui o que acabou de
+    ser digitado, em vez de ficar uma edição atrasado.
+    """
+    preenchidas = set(valores)
+    por_secao = {}
+    for linha in linhas:
+        total, feitas = por_secao.get(linha["Seção"], (0, 0))
+        por_secao[linha["Seção"]] = (total + 1, feitas + (linha["Item"] in preenchidas))
+    planilha = {s: tf for s, tf in por_secao.items() if s != FORA_DA_PLANILHA}
+    total = sum(t for t, _ in planilha.values())
+    if not total:
+        return
+    feitas = sum(f for _, f in planilha.values())
+    completas = sum(1 for t, f in planilha.values() if f == t)
+
+    def situacao(t, f):
+        return "✅ completa" if f == t else "🟡 em andamento" if f else "⚪ não começada"
+
+    with lugar.container():
+        st.progress(
+            feitas / total,
+            text=(f"**{feitas} de {total}** linhas da planilha contadas "
+                  f"({feitas / total:.0%}) · {completas} de {len(planilha)} seções completas"),
+        )
+        if secao in por_secao:
+            t, f = por_secao[secao]
+            st.progress(f / t, text=f"Nesta seção: **{f} de {t}** · {situacao(t, f)}")
+        with st.expander("Progresso por seção"):
+            st.dataframe(
+                pd.DataFrame([
+                    {"Seção": s, "Contadas": f, "Linhas": t,
+                     "Progresso": round(100 * f / t), "Situação": situacao(t, f)}
+                    for s, (t, f) in por_secao.items()
+                ]),
+                hide_index=True, width="stretch",
+                column_config={
+                    "Progresso": st.column_config.ProgressColumn(
+                        min_value=0, max_value=100, format="%d%%"),
+                },
+            )
+
+
 # Cada célula editada no `data_editor` refaz a execução. Sem o fragmento,
 # era a página inteira de novo: login, barra lateral, estoque de todos os
 # insumos e a planilha da contagem relidos do banco a cada número digitado,
@@ -3495,18 +3551,30 @@ def _apagar_contagem(data_iso, chave):
 @st.fragment
 def _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teoricos, chave):
     st.write("**Preencha o que foi contado, na unidade da linha. Deixe em branco o que não contou.**")
+    progresso = st.empty()
     secoes = list(dict.fromkeys(l["Seção"] for l in linhas))
     secao = TODAS_AS_SECOES
     if len(secoes) > 1:
-        secao = st.selectbox(
+        opcoes = [TODAS_AS_SECOES] + secoes
+        if st.session_state.get("contagem_secao") not in opcoes:
+            st.session_state.pop("contagem_secao", None)
+        col_secao, col_antes, col_depois = st.columns([6, 1, 1], vertical_alignment="bottom")
+        secao = col_secao.selectbox(
             "Seção da planilha",
-            [TODAS_AS_SECOES] + secoes,
+            opcoes,
             format_func=lambda s: s if s == TODAS_AS_SECOES
             else f"{s} · {sum(1 for l in linhas if l['Seção'] == s)} itens",
             key="contagem_secao",
             help="A mesma ordem da planilha de papel: conte uma seção, passe para a próxima. "
                  "O que foi digitado nas outras seções fica guardado.",
         )
+        posicao = opcoes.index(secao)
+        col_antes.button("◀ Anterior", width="stretch", disabled=posicao == 0,
+                         on_click=_ir_para_secao, args=(opcoes, -1),
+                         key="contagem_secao_antes")
+        col_depois.button("Próxima ▶", width="stretch", disabled=posicao == len(opcoes) - 1,
+                          on_click=_ir_para_secao, args=(opcoes, 1),
+                          key="contagem_secao_depois")
     if not itens:
         # Sem planilha importada, toda linha é um insumo contado direto:
         # "Fora da planilha" e "Vai para" repetiriam o óbvio em cada linha.
@@ -3522,6 +3590,8 @@ def _preencher_contagem(data_iso, observacao, itens, linhas, alvo, unidades, teo
         visiveis, "Item", "Contagem", "Contagem", chave,
         "%.3f", "Filtrar item", grupo=secao,
     )
+    if itens:
+        _progresso_da_contagem(progresso, linhas, valores, secao)
 
     # Um nome que não está mais em `alvo` sobrou de uma versão anterior
     # da lista (item renomeado ou apagado) e não tem para onde ir.

@@ -234,7 +234,10 @@ não olhar.
   contagem de um dia pode ser apagada inteira, com confirmação — os
   insumos voltam a partir da contagem anterior.
   A equipe que conta direto na planilha **envia a planilha preenchida** e
-  os números entram na tabela, para conferir e gravar com as mesmas regras
+  os números entram na tabela, para conferir e gravar com as mesmas regras.
+  A tela mostra o **progresso**: quantas linhas da planilha já foram
+  contadas, quantas seções estão completas e como está a seção aberta,
+  com botões de seção anterior e próxima para contar na ordem do papel
 - **Itens da Contagem**: importa a planilha de contagem (só alimentos e
   bebidas — limpeza, descartáveis, escritório e utensílios ficam de fora)
   e é onde se preenche o fator das linhas cujo peso a planilha não diz.
@@ -880,6 +883,16 @@ estoque-restaurante/
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.14.1 — Contagem com progresso
+
+- **Contagem Física por seção, com progresso.** Uma barra com quantas das
+  575 linhas da planilha já foram contadas e quantas seções estão
+  completas, outra para a seção aberta, e a lista de seções com a
+  situação de cada uma (completa, em andamento, não começada). Botões
+  "Anterior" e "Próxima" andam pelas seções na ordem do papel. O número
+  acompanha o que acabou de ser digitado, sem ir ao banco
+- Fecha a etapa 2 do design (dashboard pelo dia, na v0.14, e contagem)
 
 ### v0.14 — O dia na primeira tela, o bar inteiro e os cortes da cozinha fria
 
