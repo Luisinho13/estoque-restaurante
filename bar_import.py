@@ -107,6 +107,7 @@ PRODUCOES_QUE_SAIRAM = {
 ABAS_IGNORADAS = {
     "conde de campos": "não é mais vendido",
     "dark n stormy": "não é mais vendido (usuário, 02/10/2026)",
+    "manhattan": "não é mais vendido (usuário, 02/10/2026)",
     "planilha12": "repete a aba 'Jack Fire'",
     "planilha5": "repete a aba 'black label Ds'",
     "gin tanqueray": "é uma cópia incompleta de 'Gin Tanqueray Tropical'",
@@ -451,8 +452,28 @@ NOVOS = {
 }
 
 # Volume de 1 garrafa, lata ou caixa, em litro, quando o nome não diz.
+# Buchanan's e Primicias: 750 ml (usuário, 02/10/2026).
 VOLUMES = {
     "Vinho Jotapê Suave Box 3 L": 3.0,
+    "Whisky Buchanas 12 Anos": 0.75,
+    "Primicias Demi Sec": 0.75,
+}
+
+# Peso médio de 1 unidade, em kg, do que a contagem conta por unidade e a
+# ficha do bar pesa em kg (usuário, 02/10/2026). 0,25 kg de abacaxi no
+# suco é meio abacaxi.
+PESOS_POR_UNIDADE = {
+    "Abacaxi": 0.5,
+    "Melancia": 15.0,
+}
+
+# Dose fixa por drink, em litro, que vale qualquer que seja o número da
+# planilha. A planilha punha a Angostura em ml de dose (20 a 30 ml, 10% a
+# 15% da garrafa por drink); são gotas: 2 ml por drink (usuário, 02/10/2026).
+DOSES_FIXAS = {
+    "angostura": 0.002,
+    "angostura laranja": 0.002,
+    "bitter laranja": 0.002,
 }
 
 # Insumo contado em embalagem, vendido por unidade: 1 cápsula é 1/10 da
@@ -541,8 +562,6 @@ BITTER_MAXIMO_POR_DRINK = 0.01
 # geral não pega. É leitura minha da receita, não correção: a ficha entra
 # como a planilha diz, e isto aparece para conferência.
 AVISOS_DE_ABA = {
-    "manhattan": "'Manhattan' não tem whisky na planilha, só Punt e Mes e Angostura: "
-                 "falta o destilado base.",
     "espuma de gengibre": "'Espuma de gengibre' leva 1 kg de emulsificante e 1 L de citrus "
                           "por receita: confira se o emulsificante não é em gramas.",
     "chocolate com conhaque": "'Chocolate com Conhaque' leva 1 xícara de chocolate quente: "
@@ -715,6 +734,7 @@ def montar_plano(receitas: list[dict]) -> dict:
     # Insumo cuja quantidade não deu para converter: {(insumo, unidade): [(aba, q)]}.
     # Vira um aviso por insumo, não um por drink.
     sem_conversao = {}
+    doses_fixadas = []   # bitter da planilha trocado pela dose do bar
     conn = get_connection()
     existentes = {
         d["nome"]: {"unidade": d["unidade_medida"], "tipo": d["tipo"]}
@@ -807,6 +827,9 @@ def montar_plano(receitas: list[dict]) -> dict:
             avisos.append(f"Suposição: {MAPEAMENTOS_ASSUMIDOS[nome]}.")
 
         quantidade = item["quantidade"]
+        if nome in DOSES_FIXAS and quantidade != DOSES_FIXAS[nome]:
+            doses_fixadas.append(f"{receita['aba']} {quantidade * 1000:g} ml")
+            quantidade = DOSES_FIXAS[nome]
         corrigida = QUANTIDADES_CORRIGIDAS.get((aba, nome))
         if corrigida and corrigida[0] != quantidade:
             avisos.append(corrigida[1] + ".")
@@ -917,6 +940,11 @@ def montar_plano(receitas: list[dict]) -> dict:
         )
     avisos.extend(_quantidades_fora_da_curva(fichas, insumos))
     avisos.extend(_bitter_demais(fichas))
+    if doses_fixadas:
+        avisos.append(
+            f"Angostura em {len(doses_fixadas)} drink(s) vinha em ml de dose "
+            f"({', '.join(doses_fixadas)}): usei 2 ml por drink, a dose do bar."
+        )
     for (insumo, unidade), usos in sorted(sem_conversao.items()):
         lista = ", ".join(f"{aba} {q:g}" for aba, q in usos)
         if unidade in ("garrafa", "lata", "caixa"):
@@ -1143,6 +1171,8 @@ def _converter(item, insumo, unidade, nome, receita, prato, sem_conversao, aviso
             return quantidade / volume
     elif unidade == "un" and nome in FATORES_POR_UNIDADE:
         return quantidade * FATORES_POR_UNIDADE[nome]
+    elif unidade == "un" and insumo in PESOS_POR_UNIDADE:
+        return quantidade / PESOS_POR_UNIDADE[insumo]
     elif unidade == "un" and declarada not in ("kg", "gr", "g", "lt", "l", "ml"):
         return quantidade
     sem_conversao.setdefault((insumo, unidade), []).append((receita["aba"], quantidade))
