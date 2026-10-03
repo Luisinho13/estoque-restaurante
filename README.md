@@ -886,6 +886,17 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
 
+### v0.14.2 — Os alertas ligados
+
+- **O mesmo estoque mínimo para todos os insumos**, num botão da tela de
+  Insumos: um número só, na unidade de cada um (5 kg, 5 garrafas, 5
+  litros). Por padrão só muda quem está em zero; os mínimos definidos à mão
+  ficam, a não ser que se peça para substituir. No real, 566 insumos
+  passaram de zero para 5, e o aviso de "abaixo do mínimo" passou a valer
+  para o estoque inteiro
+- **Bar, respostas da equipe**: Lillet Ginger com 10 g de hortelã (a
+  planilha dizia um maço inteiro)
+
 ### v0.14.1 — Contagem com progresso
 
 - **Contagem Física por seção, com progresso.** Uma barra com quantas das
