@@ -1337,6 +1337,38 @@ def _estoques_minimos(insumos):
             icon=":material/notifications_off:",
         )
 
+    com_minimo = [d for d in dados if d["estoque_minimo"]]
+    with st.expander("O mesmo mínimo para todos os insumos"):
+        st.caption(
+            "Um número só, na unidade de cada insumo: 5 é 5 kg para o que é "
+            "contado em kg, 5 garrafas para o vinho, 5 litros para o leite. "
+            "Depois dá para acertar um a um na tabela abaixo."
+        )
+        col1, col2 = st.columns([1, 3], vertical_alignment="bottom")
+        minimo = col1.number_input("Mínimo", min_value=0.0, value=5.0, step=1.0,
+                                   key="minimo_de_todos")
+        substituir = col2.checkbox(
+            f"Substituir também os {len(com_minimo)} que já têm mínimo definido",
+            value=False, key="minimo_substituir",
+            help=", ".join(f"{d['insumo']} ({d['estoque_minimo']:g})" for d in com_minimo),
+        )
+        alvo = len(dados) if substituir else len(sem_minimo)
+        if st.button(f"Gravar {minimo:g} como mínimo de {alvo} insumo(s)",
+                     disabled=not alvo, key="gravar_minimo_de_todos"):
+            try:
+                total = crud.definir_minimo_de_todos(minimo, substituir)
+            except Exception as e:
+                st.error(f"Nada foi gravado: {e}")
+                return
+            st.session_state.pop("minimos_valores", None)
+            st.session_state["minimos_recado"] = (
+                f"Mínimo {minimo:g} gravado em {total} insumo(s)."
+            )
+            st.rerun()
+    recado = st.session_state.pop("minimos_recado", None)
+    if recado:
+        st.success(recado, icon=":material/check_circle:")
+
     with st.expander("Definir mínimos em lote", expanded=bool(sem_minimo)):
         st.caption(
             "Preencha só o que quiser mudar; o que ficar em branco continua "

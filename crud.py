@@ -1254,6 +1254,29 @@ def atualizar_estoques_minimos(itens: list[dict]) -> int:
     return len(itens)
 
 
+def definir_minimo_de_todos(minimo: float, substituir: bool = False) -> int:
+    """O mesmo estoque mínimo para todos os insumos, numa ida ao banco.
+
+    Pedido do usuário em 02/10/2026: "todos os estoques mínimos como 5", na
+    unidade de cada insumo (5 kg, 5 garrafas, 5 litros). Sem `substituir`,
+    só os que estão com mínimo zero mudam — os que alguém já definiu à mão
+    (o frango em 20, a parmegiana em 40) ficam como estão.
+    """
+    if minimo < 0:
+        raise ValueError("O mínimo não pode ser negativo.")
+    conn = get_connection()
+    try:
+        filtro = "" if substituir else " WHERE estoque_minimo = 0 OR estoque_minimo IS NULL"
+        total = conn.execute(f"UPDATE insumos SET estoque_minimo = ?{filtro}", (minimo,)).rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return total
+
+
 # ---------- O cálculo principal ----------
 
 # ---------- Produção ----------

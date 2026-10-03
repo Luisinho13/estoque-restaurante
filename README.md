@@ -248,7 +248,9 @@ não olhar.
   insumo que fica sem linha e sem histórico nenhum pode ser excluído na
   mesma importação, para não sobrar na contagem como "fora da planilha"
 - **Estoque mínimo em lote**, na tela de Insumos: é o mínimo que liga o
-  semáforo do painel e o alerta de reposição. Definido um a um, em mais de
+  semáforo do painel e o alerta de reposição. Há também um botão que grava
+  o mesmo mínimo em todos de uma vez (5 kg, 5 garrafas, 5 litros), sem
+  mexer nos que já foram definidos à mão, salvo se pedir. Definido um a um, em mais de
   cem insumos, não é definido nunca — e sem ele o sistema só conta o
   passado, em vez de avisar antes de faltar
 - **Perdas e Reconciliação**: entre duas contagens, quanto de cada insumo
