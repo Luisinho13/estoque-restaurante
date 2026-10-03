@@ -459,12 +459,13 @@ VOLUMES = {
     "Primicias Demi Sec": 0.75,
 }
 
-# Peso médio de 1 unidade, em kg, do que a contagem conta por unidade e a
-# ficha do bar pesa em kg (usuário, 02/10/2026). 0,25 kg de abacaxi no
-# suco é meio abacaxi.
+# Peso médio de 1 unidade (ou 1 maço), em kg, do que a contagem conta por
+# unidade e a ficha do bar pesa em kg (usuário, 02/10/2026). 0,25 kg de
+# abacaxi no suco é meio abacaxi; 15 g de hortelã são 0,15 maço.
 PESOS_POR_UNIDADE = {
     "Abacaxi": 0.5,
     "Melancia": 15.0,
+    "Hortelã": 0.1,
 }
 
 # Dose fixa por drink, em litro, que vale qualquer que seja o número da
@@ -1171,7 +1172,7 @@ def _converter(item, insumo, unidade, nome, receita, prato, sem_conversao, aviso
             return quantidade / volume
     elif unidade == "un" and nome in FATORES_POR_UNIDADE:
         return quantidade * FATORES_POR_UNIDADE[nome]
-    elif unidade == "un" and insumo in PESOS_POR_UNIDADE:
+    elif unidade in ("un", "maço") and insumo in PESOS_POR_UNIDADE:
         return quantidade / PESOS_POR_UNIDADE[insumo]
     elif unidade == "un" and declarada not in ("kg", "gr", "g", "lt", "l", "ml"):
         return quantidade

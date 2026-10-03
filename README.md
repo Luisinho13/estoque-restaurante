@@ -897,8 +897,9 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   planilhas do bar, e a importação apaga o prato se ele não tiver venda nem Zig
 - **Avisos do bar resolvidos com a equipe**: Angostura é 2 ml por drink (a
   planilha punha 20 a 30 ml, 10% a 15% da garrafa); Buchanan's e Primicias
-  são garrafas de 750 ml; o abacaxi pesa 0,5 kg e a melancia 15 kg, então o
-  suco de 0,25 kg de abacaxi desconta meio abacaxi
+  são garrafas de 750 ml; o abacaxi pesa 0,5 kg, a melancia 15 kg e o maço
+  de hortelã 100 g, então o suco de 0,25 kg de abacaxi desconta meio
+  abacaxi e o mojito, com 20 g de hortelã, 0,2 maço
 
 ### v0.14 — O dia na primeira tela, o bar inteiro e os cortes da cozinha fria
 
