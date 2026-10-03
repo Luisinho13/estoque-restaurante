@@ -508,6 +508,10 @@ QUANTIDADES_CORRIGIDAS = {
     ("tanqueray ds", "gin tanqueray"): (
         0.05, "'Tanqueray Ds' diz 0,005 L de gin (5 ml); a dose das outras abas é "
               "0,05: usei 50 ml"),
+    # Confirmado pelo usuário em 02/10/2026: 10 g, não um maço inteiro.
+    ("lillet ginger", "hortela"): (
+        0.01, "'Lillet Ginger' diz 100 g de hortelã; a quantidade certa é 10 g "
+              "(0,1 maço)"),
 }
 
 SEM_ESTOQUE = {"agua quente", "agua filtrada"}
