@@ -893,6 +893,8 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   "Anterior" e "Próxima" andam pelas seções na ordem do papel. O número
   acompanha o que acabou de ser digitado, sem ir ao banco
 - Fecha a etapa 2 do design (dashboard pelo dia, na v0.14, e contagem)
+- **Dark N Stormy sai do cardápio**: a aba é ignorada nas duas planilhas do
+  bar, e a importação apaga o prato se ele não tiver venda nem Zig
 
 ### v0.14 — O dia na primeira tela, o bar inteiro e os cortes da cozinha fria
 

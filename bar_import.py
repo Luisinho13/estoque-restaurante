@@ -106,6 +106,7 @@ PRODUCOES_QUE_SAIRAM = {
 # Aba que não entra, e por quê. Cópia repetida vale a primeira.
 ABAS_IGNORADAS = {
     "conde de campos": "não é mais vendido",
+    "dark n stormy": "não é mais vendido (usuário, 02/10/2026)",
     "planilha12": "repete a aba 'Jack Fire'",
     "planilha5": "repete a aba 'black label Ds'",
     "gin tanqueray": "é uma cópia incompleta de 'Gin Tanqueray Tropical'",
@@ -542,8 +543,6 @@ BITTER_MAXIMO_POR_DRINK = 0.01
 AVISOS_DE_ABA = {
     "manhattan": "'Manhattan' não tem whisky na planilha, só Punt e Mes e Angostura: "
                  "falta o destilado base.",
-    "dark n stormy": "'Dark N Stormy' leva 0,001 L de ginger ale e 0,1 kg de limão: "
-                     "parecem trocados (o drink costuma levar uns 100 ml de ginger ale).",
     "espuma de gengibre": "'Espuma de gengibre' leva 1 kg de emulsificante e 1 L de citrus "
                           "por receita: confira se o emulsificante não é em gramas.",
     "chocolate com conhaque": "'Chocolate com Conhaque' leva 1 xícara de chocolate quente: "
@@ -939,7 +938,11 @@ def montar_plano(receitas: list[dict]) -> dict:
     for receita in todas:
         aba = chave(receita["aba"])
         if aba in ABAS_IGNORADAS:
+            # Sai o prato com o nome da aba e o com o nome que o sistema
+            # deu ao drink ("Dark N Stormy"), se não tiver venda nem Zig.
             destino_da_aba[receita["aba"].strip()] = None
+            if aba in NOMES_DE_DRINK:
+                destino_da_aba[NOMES_DE_DRINK[aba]] = None
         elif aba in PREPAROS:
             destino_da_aba[receita["aba"].strip()] = PREPAROS_VENDIDOS.get(aba, (None,))[0]
         else:
