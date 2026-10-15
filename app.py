@@ -6,6 +6,7 @@ Rodar com: streamlit run app.py
 """
 
 import datetime
+import os
 from pathlib import Path
 
 import altair as alt
@@ -21,6 +22,7 @@ import crud
 import exemplos
 import ficha_import
 import nfe_import
+import sugestao_compra
 import zig_import
 
 MODO_DEMO = database.modo_demo()
@@ -4305,6 +4307,147 @@ def pagina_corrigir():
         )
 
 
+# ---------- Sugestão de compra ----------
+
+def _config_callmebot() -> tuple[str, str] | None:
+    """Telefone e chave do CallMeBot, se o app tiver. A demo nunca manda."""
+    if MODO_DEMO:
+        return None
+    telefone = os.environ.get("CALLMEBOT_TELEFONE")
+    chave = os.environ.get("CALLMEBOT_CHAVE")
+    if not (telefone and chave):
+        try:
+            telefone = st.secrets["callmebot"]["telefone"]
+            chave = st.secrets["callmebot"]["chave"]
+        except Exception:
+            return None
+    return str(telefone).strip(), str(chave).strip()
+
+
+def pagina_sugestao():
+    _titulo("shopping_basket", "Previsão e Sugestão de Compra")
+    st.caption(
+        "A previsão de cada prato sai das vendas do PDV, dia da semana a dia da "
+        "semana, com peso maior para a semana mais recente. Ela desce pela ficha "
+        "técnica (e pela receita dos molhos) até o que se compra, e a compra é o "
+        "que falta para cobrir a previsão e ainda sobrar o mínimo. Toda segunda "
+        "às 13h a mesma conta chega no WhatsApp."
+    )
+
+    col1, col2 = st.columns(2)
+    dias = col1.number_input("A compra cobre quantos dias", 1, 30,
+                             sugestao_compra.DIAS_A_COBRIR, key="sugestao_dias")
+    semanas = col2.number_input(
+        "Semanas de venda na previsão", 1, 8, sugestao_compra.SEMANAS_DE_HISTORICO,
+        key="sugestao_semanas",
+        help="1 = só a semana passada. Com mais semanas, a previsão oscila menos; "
+             "a mais recente sempre pesa mais.",
+    )
+    sugestao = sugestao_compra.calcular(int(dias), int(semanas))
+    historico = sugestao["historico"]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Previsão (pratos e drinks)", sugestao["previsto_total"], border=True)
+    m2.metric("Semana passada", sugestao["semana_passada_total"], border=True)
+    m3.metric("Itens a comprar", len(sugestao["itens"]), border=True)
+    m4.metric("Semanas com venda", f"{historico['semanas_com_dado']}/{historico['semanas']}",
+              border=True, help=f"De {_data_br(historico['inicio'])} a {_data_br(historico['fim'])}.")
+
+    if not sugestao["demanda"]:
+        st.info("Nenhuma venda lançada nas semanas de base: não há o que prever ainda.")
+        return
+    if sugestao["dias_sem_venda"]:
+        dias_txt = ", ".join(_data_br(d)[:5] for d in sugestao["dias_sem_venda"])
+        st.warning(f"Dias sem venda lançada, que ficam fora da previsão: {dias_txt}. "
+                   "Se o restaurante abriu, lance a venda; se não, marque o dia na Venda do Dia.")
+    if sugestao["pratos_sem_ficha"]:
+        st.warning("Pratos previstos sem ficha técnica (não entram na compra): "
+                   + ", ".join(p["prato"] for p in sugestao["pratos_sem_ficha"]))
+    if sugestao["producoes_sem_receita"]:
+        st.warning("Produções sem receita ou rendimento (o cru delas não entra): "
+                   + ", ".join(sugestao["producoes_sem_receita"]))
+
+    aba_compra, aba_demanda, aba_whats = st.tabs(
+        ["O que comprar", "Previsão de demanda", "Mensagem do WhatsApp"])
+
+    with aba_compra:
+        if not sugestao["itens"]:
+            st.success("Nada a comprar: o estoque cobre a previsão.")
+        else:
+            df = pd.DataFrame(sugestao["itens"])
+            df["acaba"] = df.apply(
+                lambda l: sugestao_compra._quando_acaba(l, sugestao["hoje"]), axis=1)
+            visivel = df[[
+                "fornecedor", "insumo", "comprar", "unidade_medida", "acaba",
+                "necessidade", "estoque_atual", "estoque_minimo",
+            ]].rename(columns={
+                "fornecedor": "Fornecedor", "insumo": "Insumo", "comprar": "Comprar",
+                "unidade_medida": "Un.", "acaba": "Quando acaba",
+                "necessidade": "Previsão de uso", "estoque_atual": "Estoque atual",
+                "estoque_minimo": "Mínimo",
+            })
+            st.dataframe(
+                visivel, width="stretch", hide_index=True,
+                column_config={
+                    "Previsão de uso": st.column_config.NumberColumn(format="%.2f"),
+                    "Estoque atual": st.column_config.NumberColumn(format="%.1f"),
+                    "Mínimo": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+            st.download_button(
+                "Baixar em CSV",
+                data=visivel.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"sugestao-compra-{sugestao['hoje']}.csv",
+                mime="text/csv", icon=":material/download:",
+            )
+        if sugestao["parados_abaixo_do_minimo"]:
+            with st.expander(f"{len(sugestao['parados_abaixo_do_minimo'])} insumo(s) "
+                             "parado(s) abaixo do mínimo, fora da lista"):
+                st.caption("Nenhuma venda prevista os usa. Se o mínimo deles não faz "
+                           "sentido, ajuste na tela Insumos.")
+                st.write(", ".join(sugestao["parados_abaixo_do_minimo"]))
+
+    with aba_demanda:
+        por_dia = pd.DataFrame(
+            [{"data": d, "previsto": q} for d, q in sugestao["previsto_por_dia"].items()])
+        por_dia["dia"] = por_dia["data"].map(sugestao_compra._dia_curto)
+        grafico = (
+            alt.Chart(por_dia)
+            .mark_bar(color=COR, cornerRadiusEnd=4)
+            .encode(
+                x=alt.X("dia:N", sort=None, title=None),
+                y=alt.Y("previsto:Q", title="Pratos e drinks previstos"),
+                tooltip=[alt.Tooltip("dia:N", title="Dia"),
+                         alt.Tooltip("previsto:Q", title="Previstos")],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(grafico, width="stretch")
+        demanda = pd.DataFrame(sugestao["demanda"])[["prato", "previsto", "semana_passada"]]
+        st.dataframe(
+            demanda.rename(columns={"prato": "Prato", "previsto": "Previsto",
+                                    "semana_passada": "Semana passada"}),
+            width="stretch", hide_index=True,
+            column_config={"Previsto": st.column_config.NumberColumn(format="%.1f")},
+        )
+
+    with aba_whats:
+        texto = sugestao_compra.mensagem(sugestao)
+        st.code(texto, language=None)
+        config = _config_callmebot()
+        if config is None:
+            st.caption("O envio daqui precisa do telefone e da chave do CallMeBot nos "
+                       "secrets do app. O envio de segunda às 13h roda à parte, no GitHub.")
+        elif st.button("Mandar no WhatsApp agora", type="primary",
+                       icon=":material/send:", key="sugestao_enviar"):
+            try:
+                partes = sugestao_compra.enviar_whatsapp(texto, *config)
+            except Exception as erro:
+                st.error(f"Não foi possível mandar: {erro}")
+            else:
+                st.success(f"Enviado em {partes} mensagem(ns).")
+
+
 # ---------- Navegação ----------
 
 PG_DASHBOARD = st.Page(
@@ -4359,6 +4502,10 @@ PG_CORRIGIR = st.Page(
 PG_ZIG = st.Page(
     pagina_zig, title="Importar Vendas (PDV)", icon=":material/receipt:", url_path="vendas-pdv"
 )
+PG_SUGESTAO = st.Page(
+    pagina_sugestao, title="Sugestão de Compra", icon=":material/shopping_basket:",
+    url_path="sugestao-compra",
+)
 PG_PERDAS = st.Page(
     pagina_perdas, title="Perdas e Reconciliação", icon=":material/scale:",
     url_path="perdas",
@@ -4405,6 +4552,7 @@ PAGINAS_POR_AREA = {
     "contagem": PG_CONTAGEM,
     "corrigir": PG_CORRIGIR,
     "perdas": PG_PERDAS,
+    "sugestao": PG_SUGESTAO,
 }
 
 
@@ -4415,7 +4563,7 @@ def _liberadas(*areas):
 # A ordem segue o uso: o que se consulta, o que se lança todo dia, a
 # contagem da semana e, por último, os cadastros, que mudam pouco.
 SECOES_DO_MENU = {
-    "Visão geral": ("dashboard", "painel", "saida", "perdas"),
+    "Visão geral": ("dashboard", "painel", "saida", "sugestao", "perdas"),
     "Lançamentos do dia": ("venda", "producao", "baixa", "compra", "nf_manual", "nfe",
                            "zig", "corrigir"),
     "Contagem": ("contagem", "itens_contagem"),

@@ -27,6 +27,7 @@ AREAS = {
     "painel": "Painel de Estoque",
     "saida": "Saída de Estoque no Período",
     "perdas": "Perdas e Reconciliação",
+    "sugestao": "Previsão e Sugestão de Compra",
     "insumos": "Insumos",
     "pratos": "Pratos",
     "ficha": "Ficha Técnica",
