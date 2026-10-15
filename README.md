@@ -1,5 +1,7 @@
 # 📦 Controle de Estoque para Restaurante
 
+*[Read in English](README.en.md)*
+
 Substitui a contagem manual semanal de estoque por um cálculo automático
 a partir de compras e vendas. A contagem física deixa de ser a rotina de
 toda segunda-feira e vira uma conferência mensal.
@@ -17,12 +19,6 @@ Entra direto e dá para mexer em tudo — lançar venda, importar nota,
 fazer contagem. As telas de importação têm um botão para baixar um
 arquivo de exemplo e subir ali mesmo. Os dados são fictícios e voltam ao
 começo quando o app reinicia.
-
-**O sistema de verdade:**
-https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
-
-Esse link é público, o sistema não — o acesso continua por login, e os
-dados são os do restaurante.
 
 ![Dashboard do sistema](docs/dashboard.png)
 
@@ -256,6 +252,12 @@ não olhar.
 - **Perdas e Reconciliação**: entre duas contagens, quanto de cada insumo
   virou venda, quanto sobrou e quanto se perdeu — em quantidade e em
   percentual do que estava disponível
+- **Previsão de demanda e sugestão de compra, no WhatsApp**: toda segunda
+  às 13h, a previsão da semana (prato a prato, pelo dia da semana, a partir
+  das vendas do PDV) desce pela ficha técnica e pela receita dos molhos até
+  o que se compra, e chega no celular do comprador com a quantidade de cada
+  item e o dia em que ele acaba. A mesma conta tem tela no app. Detalhes,
+  e como ligar o bot, em [docs/sugestao-compra.md](docs/sugestao-compra.md)
 
 ![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
 
@@ -776,6 +778,25 @@ então a tela de Perdas e Reconciliação aparece preenchida.
 A variável `ESTOQUE_DB` aponta o app para outro arquivo de banco. Sem
 ela, o app usa o `estoque.db` padrão.
 
+### Testes
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Cobrem o cálculo do estoque (a contagem como base, o `>=` do dia da
+contagem, a venda que desconta um nível só, a produção e o gasto
+congelado de cada leva, baixa, venda relançada), a importação da NF-e e
+da planilha da Zig (fator de conversão, cancelamento com desconto total,
+dia operacional, SKU sensível a maiúsculas, reimportação sem duplicar) e
+a tradução do SQL para o Postgres (`?` → `%s`, `%` escapado, o esquema
+separado comando a comando).
+
+Cada teste roda num SQLite novo, numa pasta temporária. O `conftest.py`
+liga `MODO_DEMO` antes de importar o `database.py`, então os testes não
+alcançam o Postgres nem numa máquina com a credencial configurada.
+
 ### Rodar sobre o banco na nuvem
 
 Basta existir um arquivo `.streamlit/secrets.toml` com a URL do Postgres:
@@ -798,9 +819,8 @@ python migrar_para_nuvem.py
 
 ### Publicar no Streamlit Community Cloud
 
-Já publicado, em
-https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app — o que
-segue serve para republicar ou subir uma segunda instância:
+É assim que o sistema do restaurante está no ar. Para republicar ou subir
+uma segunda instância:
 
 1. Suba o repositório para o GitHub
 2. Em share.streamlit.io, conecte o repositório e aponte para `app.py`
@@ -871,6 +891,8 @@ estoque-restaurante/
 ├── cozinha_fria.py   # peça e porcionado da carne como itens separados
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
+├── sugestao_compra.py # previsão de demanda e sugestão de compra
+├── bot_compras.py    # manda a sugestão no WhatsApp (CallMeBot)
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
 ├── assets/           # logo do app
 ├── .streamlit/config.toml  # tema (cores, fonte, cantos)
@@ -879,12 +901,44 @@ estoque-restaurante/
 ├── backup_nuvem.py   # copia todas as tabelas do banco para um JSON local
 ├── migrar_para_nuvem.py   # copia o banco local para o Postgres
 ├── diagnostico.py    # inspeção de dados de um prato ou insumo
-└── requirements.txt
+├── tests/            # pytest: estoque, importação e tradução do SQL
+├── requirements.txt
+└── requirements-dev.txt   # o mesmo, mais o pytest
 ```
 
 Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
 
 ## Patch notes
+
+### v0.15.1 — Testes e README em inglês
+
+- **Testes automatizados com pytest** (`tests/`): cálculo do estoque,
+  importação da NF-e e da Zig, e tradução do SQL para o Postgres. Cada um
+  roda num SQLite temporário e não alcança o banco real
+- **README em inglês** (`README.en.md`): resumo, stack, demonstração e
+  resultados
+- O link do sistema real saiu do README; fica só o da demonstração
+
+### v0.15 — Previsão de demanda e compra no WhatsApp
+
+Começo de um segundo projeto em cima do estoque
+([docs/sugestao-compra.md](docs/sugestao-compra.md)).
+
+- **Previsão de demanda**: cada prato, cada dia da próxima semana, pela
+  média do mesmo dia da semana nas últimas 4 semanas de venda do PDV, com
+  peso maior para a mais recente. Dia sem venda lançada fica fora da média
+  (não vira zero); dia marcado como fechado conta como zero
+- **Sugestão de compra**: a previsão desce pela ficha do prato e pela
+  receita das produções até o cru, abatendo o que já está pronto (conta de
+  MRP), e a compra é a previsão + o mínimo − o estoque atual
+- **"Quando acaba"**: o estoque de hoje consumido pela previsão de cada
+  dia, até o primeiro dia em que não chega
+- **Bot no WhatsApp**: `bot_compras.py`, agendado no GitHub Actions para
+  segunda às 13h, manda pelo CallMeBot agrupado pelo último fornecedor de
+  cada item. Sem `DATABASE_URL` ele se recusa a mandar, em vez de calcular
+  sobre um banco vazio
+- **Tela Sugestão de Compra** (Visão geral): dias cobertos e semanas de
+  base ajustáveis, previsão por dia e por prato, CSV e a mensagem pronta
 
 ### v0.14.2 — Os alertas ligados
 
@@ -1227,8 +1281,7 @@ feito vira um número errado com cara de certo.
 
 ### v0.6 — App no ar
 
-- Sistema publicado no Streamlit Community Cloud, em
-  https://estoque-restaurante-2zcsdq2cje4ayn4hyvrtdw.streamlit.app
+- Sistema publicado no Streamlit Community Cloud
 - Acessível de qualquer aparelho pelo navegador, sem instalar nada —
   o celular no salão e o computador do escritório veem o mesmo estoque
 - Roda sobre o banco na nuvem preparado na v0.4; a URL do Postgres fica
@@ -1315,7 +1368,9 @@ feito vira um número errado com cara de certo.
   pela contagem e pelas compras, porque não há prato ligado a elas
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
-- Sugestão de compra a partir dos dias de estoque restantes
+- Sugestão de compra: unidade do fornecedor (caixa, fardo), prazo por
+  fornecedor e o acerto da previsão semana a semana (lista completa em
+  [docs/sugestao-compra.md](docs/sugestao-compra.md))
 
 ---
 
