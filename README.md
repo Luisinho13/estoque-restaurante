@@ -2,6 +2,8 @@
 
 *[Read in English](README.en.md)*
 
+[![Testes](https://github.com/Luisinho13/estoque-restaurante/actions/workflows/testes.yml/badge.svg)](https://github.com/Luisinho13/estoque-restaurante/actions/workflows/testes.yml)
+
 Substitui a contagem manual semanal de estoque por um cálculo automático
 a partir de compras e vendas. A contagem física deixa de ser a rotina de
 toda segunda-feira e vira uma conferência mensal.
@@ -794,7 +796,8 @@ separado comando a comando).
 
 Cada teste roda num SQLite novo, numa pasta temporária. O `conftest.py`
 liga `MODO_DEMO` antes de importar o `database.py`, então os testes não
-alcançam o Postgres nem numa máquina com a credencial configurada.
+alcançam o Postgres nem numa máquina com a credencial configurada. No
+GitHub, eles rodam sozinhos a cada push (`.github/workflows/testes.yml`).
 
 ### Rodar sobre o banco na nuvem
 
@@ -1371,4 +1374,4 @@ feito vira um número errado com cara de certo.
 
 ---
 
-<sub>Criado por Luis Felipe · © 2026 · Todos os direitos reservados. O código está público para consulta; uso, cópia ou redistribuição dependem de autorização do autor.</sub>
+<sub>Criado por Luis Souza · © 2026 · Todos os direitos reservados. O código está público para consulta; uso, cópia ou redistribuição dependem de autorização do autor.</sub>

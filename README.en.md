@@ -2,6 +2,8 @@
 
 *[Leia em português](README.md)*
 
+[![Tests](https://github.com/Luisinho13/estoque-restaurante/actions/workflows/testes.yml/badge.svg)](https://github.com/Luisinho13/estoque-restaurante/actions/workflows/testes.yml)
+
 Replaces the weekly manual stock count with an automatic calculation from
 purchases and sales. The physical count stops being the Monday routine and
 becomes a monthly check.
@@ -112,8 +114,9 @@ pytest
 
 They cover the stock calculation, the NF-e and POS imports, and the SQL
 translation to Postgres. Each test runs on a fresh SQLite database in a
-temporary folder, and never reaches Postgres.
+temporary folder, and never reaches Postgres. On GitHub they run on every
+push (`.github/workflows/testes.yml`).
 
 ---
 
-<sub>Created by Luis Felipe · © 2026 · All rights reserved. The code is public for reference; use, copying or redistribution require the author's permission.</sub>
+<sub>Created by Luis Souza · © 2026 · All rights reserved. The code is public for reference; use, copying or redistribution require the author's permission.</sub>

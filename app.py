@@ -204,7 +204,7 @@ def tela_login():
         with aba_cadastrar:
             _aba_cadastrar()
     st.caption(
-        "<div style='text-align:center'>Criado por Luis Felipe · © 2026</div>",
+        "<div style='text-align:center'>Criado por Luis Souza · © 2026</div>",
         unsafe_allow_html=True,
     )
 
@@ -4630,7 +4630,7 @@ with st.sidebar:
             st.warning(f"📅 Venda não lançada: {antes}{dias}")
             st.page_link(PG_VENDA, label="Lançar agora", icon=":material/point_of_sale:")
     st.caption(f"Hoje: {crud.hoje().strftime('%d/%m/%Y')}")
-    st.caption("Criado por Luis Felipe · © 2026 · Todos os direitos reservados")
+    st.caption("Criado por Luis Souza · © 2026 · Todos os direitos reservados")
 
 if st.session_state.pop("_sem_areas", False):
     st.info(
