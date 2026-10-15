@@ -4330,8 +4330,7 @@ def pagina_sugestao():
         "A previsão de cada prato sai das vendas do PDV, dia da semana a dia da "
         "semana, com peso maior para a semana mais recente. Ela desce pela ficha "
         "técnica (e pela receita dos molhos) até o que se compra, e a compra é o "
-        "que falta para cobrir a previsão e ainda sobrar o mínimo. Toda segunda "
-        "às 13h a mesma conta chega no WhatsApp."
+        "que falta para cobrir a previsão e ainda sobrar o mínimo."
     )
 
     col1, col2 = st.columns(2)
@@ -4437,7 +4436,7 @@ def pagina_sugestao():
         config = _config_callmebot()
         if config is None:
             st.caption("O envio daqui precisa do telefone e da chave do CallMeBot nos "
-                       "secrets do app. O envio de segunda às 13h roda à parte, no GitHub.")
+                       "secrets do app.")
         elif st.button("Mandar no WhatsApp agora", type="primary",
                        icon=":material/send:", key="sugestao_enviar"):
             try:

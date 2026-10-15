@@ -252,12 +252,11 @@ não olhar.
 - **Perdas e Reconciliação**: entre duas contagens, quanto de cada insumo
   virou venda, quanto sobrou e quanto se perdeu — em quantidade e em
   percentual do que estava disponível
-- **Previsão de demanda e sugestão de compra, no WhatsApp**: toda segunda
-  às 13h, a previsão da semana (prato a prato, pelo dia da semana, a partir
-  das vendas do PDV) desce pela ficha técnica e pela receita dos molhos até
-  o que se compra, e chega no celular do comprador com a quantidade de cada
-  item e o dia em que ele acaba. A mesma conta tem tela no app. Detalhes,
-  e como ligar o bot, em [docs/sugestao-compra.md](docs/sugestao-compra.md)
+- **Previsão de demanda e sugestão de compra**: a previsão da semana
+  (prato a prato, pelo dia da semana, a partir das vendas do PDV) desce
+  pela ficha técnica e pela receita dos molhos até o que se compra, com a
+  quantidade de cada item, agrupada por fornecedor, e o dia em que ele
+  acaba. Detalhes em [docs/sugestao-compra.md](docs/sugestao-compra.md)
 
 ![Tela "O que acaba primeiro"](docs/o-que-acaba-primeiro.png)
 
@@ -892,7 +891,7 @@ estoque-restaurante/
 ├── nfe_import.py     # leitura de XML de NF-e → compras
 ├── zig_import.py     # leitura da planilha do PDV → vendas
 ├── sugestao_compra.py # previsão de demanda e sugestão de compra
-├── bot_compras.py    # manda a sugestão no WhatsApp (CallMeBot)
+├── bot_compras.py    # envio da sugestão por WhatsApp (ainda não ligado)
 ├── demo.py           # entrada da vitrine (roda o app em modo demonstração)
 ├── assets/           # logo do app
 ├── .streamlit/config.toml  # tema (cores, fonte, cantos)
@@ -919,7 +918,7 @@ Python, Streamlit e SQLite ou PostgreSQL — o mesmo código roda nos dois.
   resultados
 - O link do sistema real saiu do README; fica só o da demonstração
 
-### v0.15 — Previsão de demanda e compra no WhatsApp
+### v0.15 — Previsão de demanda e sugestão de compra
 
 Começo de um segundo projeto em cima do estoque
 ([docs/sugestao-compra.md](docs/sugestao-compra.md)).
@@ -933,12 +932,9 @@ Começo de um segundo projeto em cima do estoque
   MRP), e a compra é a previsão + o mínimo − o estoque atual
 - **"Quando acaba"**: o estoque de hoje consumido pela previsão de cada
   dia, até o primeiro dia em que não chega
-- **Bot no WhatsApp**: `bot_compras.py`, agendado no GitHub Actions para
-  segunda às 13h, manda pelo CallMeBot agrupado pelo último fornecedor de
-  cada item. Sem `DATABASE_URL` ele se recusa a mandar, em vez de calcular
-  sobre um banco vazio
 - **Tela Sugestão de Compra** (Visão geral): dias cobertos e semanas de
-  base ajustáveis, previsão por dia e por prato, CSV e a mensagem pronta
+  base ajustáveis, previsão por dia e por prato, agrupada pelo último
+  fornecedor de cada item, com CSV e o texto pronto para mandar
 
 ### v0.14.2 — Os alertas ligados
 
@@ -1368,6 +1364,7 @@ feito vira um número errado com cara de certo.
   pela contagem e pelas compras, porque não há prato ligado a elas
 - Custo da perda em reais, cruzando com o preço de compra
 - Exportação de relatórios mensais
+- Mandar a sugestão de compra no WhatsApp toda segunda
 - Sugestão de compra: unidade do fornecedor (caixa, fardo), prazo por
   fornecedor e o acerto da previsão semana a semana (lista completa em
   [docs/sugestao-compra.md](docs/sugestao-compra.md))
